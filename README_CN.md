@@ -88,6 +88,16 @@ npm run test:live        # 打真实本机 opencode，每个免费模型各跑�
 npm run test:kernel      # 打已发布的 dsh 内核（需要 DSH_ROOT）
 ```
 
+| 套件 | 钉住什么 | 规模 |
+|---|---|---|
+| `check-syntax.mjs` | 每个模块都能解析 | 16 个文件 |
+| `bundle-manifest-check.mjs` | bundle 挂载接线、发布文件清单、仓库元数据 | 28 项 |
+| `test/classifier.mjs` | 失败映射逐分支钉死，含 failure 必须是自有属性 | 16 项 |
+| `test/settings.mjs` | 默认值、覆盖顺序、夹取、原子落盘、重启读回 | 19 项 |
+| `test/mock-runtime.mjs` | 适配器对上最小 cordis + 假 opencode 的完整契约 | 49 项 |
+| `kernel-contract-check.mjs` | 对已发布内核核对方法集、chunk 类型、失败码 | 4 组 |
+| `test/live.mjs` | 打真实本机 opencode，每个零成本模型各一轮 | 随环境 |
+
 契约套件用最小 cordis 上下文 + 假 opencode 服务跑真插件，断言的就是真内核会断言的东西：`registerAdapter` 会对每条路由调 `providerInfo` 与 `providerRetryPolicy`，并要求退避字段在顶层；`prepareCall` 会被 await，其 `.model` 受同步校验（少写一个 `await` 就是把 Promise 交给校验，直接 `INVALID_MODEL_INFO`——真机上踩过，现已固化成断言）；`normalizeModelInfo` 要求 `id` 等于所请求的 model、name 非空、contextWindow 为整数、档位 id 唯一；流必须严格是 `block-start`、`text-delta`、`block-end`、`usage`、`finish`。
 
 `scripts/kernel-contract-check.mjs` 补的是结构式实现留下的那道缝：它读已发布内核的源码，只要内核开始调用一个我们没实现的方法、出现一个它不认识的 chunk 类型、或我们产出的失败码不在它的词表里，就报错。

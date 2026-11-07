@@ -90,6 +90,17 @@ npm run test:live        # against the real local opencode, one round per free m
 npm run test:kernel      # against the published harness kernel (needs DSH_ROOT)
 ```
 
+| Suite | What it pins | Count |
+|---|---|---|
+| `scripts/check-syntax.mjs` | every shipped module parses | 16 files |
+| `scripts/bundle-manifest-check.mjs` | bundle wiring, tarball file list, repo metadata | 28 checks |
+| `test/classifier.mjs` | failure mapping, branch by branch, plus own-property failure shape | 16 asserts |
+| `test/settings.mjs` | defaults, override order, clamping, atomic flush, restart reload | 19 asserts |
+| `test/mock-runtime.mjs` | the adapter against a minimal cordis + fake opencode | 49 asserts |
+| `scripts/kernel-contract-check.mjs` | adapter methods, chunk types, failure codes vs the published kernel | 4 groups |
+| `test/live.mjs` | the real local opencode, one round per zero-cost model | environment |
+
+
 The contract suite runs the plugin against a minimal cordis context and a fake opencode server, and asserts what the real kernel asserts: `registerAdapter` calls `providerInfo` and `providerRetryPolicy` on every route and requires the backoff fields at the top level; `prepareCall` is awaited and its `.model` is validated synchronously (a missing `await` hands the kernel a Promise and dies with `INVALID_MODEL_INFO` — found on a real boot, now pinned by a test); `normalizeModelInfo` requires `id` to equal the requested model, a non-empty name, an integer context window and unique effort ids; and a stream must be exactly `block-start`, `text-delta`, `block-end`, `usage`, `finish`.
 
 `scripts/kernel-contract-check.mjs` closes the gap that structural typing opens: it reads the published harness source and fails if the kernel starts calling an adapter method we do not implement, emits a chunk type it does not know, or if a failure code we produce is not in its vocabulary.
