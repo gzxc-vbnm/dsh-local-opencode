@@ -1,0 +1,30 @@
+{
+  "name": "local-opencode",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "把本机 opencode 已经可用的免费模型（OpenCode 零成本通道等）注册成 dsh 的模型提供方，让 dsh 的模型选择器能直接选它们对话。",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "selftest": "node test/selftest.mjs"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "opencode",
+    "free-model",
+    "llm-provider"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

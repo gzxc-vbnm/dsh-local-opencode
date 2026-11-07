@@ -1,0 +1,4 @@
+{
+  "name": "Local OpenCode (free models from your local opencode)",
+  "description": "Discovers the local opencode server and registers its zero-cost free models as a dsh model provider."
+}

@@ -1,0 +1,10 @@
+# local-opencode bundle patch.
+#
+# 一行 insert 就挂载 Host 插件：name 必须是真实包名（cordis 按 name 去 import 包，
+# 写错会变成 Cannot find package），id 是这条 entry 的名字，config 直接进 apply(ctx, config)。
+# 想临时停掉模型通道：把 enabled 改成 false（路由不注册），或者整行 disabled: true。
+- insert:
+    - id: local-opencode
+      name: local-opencode
+      config:
+        enabled: true
