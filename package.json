@@ -1,26 +1,80 @@
 {
-  "name": "local-opencode",
+  "name": "dsh-local-opencode",
   "version": "0.1.0",
-  "private": true,
+  "description": "Local OpenCode plugin for DeepSeek Harness (dsh): discovers the opencode server already running on this machine and registers its zero-cost free models (Big Pickle, DeepSeek V4.1 Flash Free, GLM-5.3-Flash Free and friends) as a model provider, so the dsh model picker can select them directly. No login, no API key.",
   "type": "module",
-  "description": "把本机 opencode 已经可用的免费模型（OpenCode 零成本通道等）注册成 dsh 的模型提供方，让 dsh 的模型选择器能直接选它们对话。",
+  "license": "MIT",
+  "author": "gzxc-vbnm",
+  "homepage": "https://github.com/gzxc-vbnm/dsh-local-opencode#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gzxc-vbnm/dsh-local-opencode.git"
+  },
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/gzxc-vbnm"
+  },
+  "bugs": {
+    "url": "https://github.com/gzxc-vbnm/dsh-local-opencode/issues"
+  },
   "main": "./index.js",
   "exports": {
     ".": "./index.js",
     "./package.json": "./package.json"
   },
-  "scripts": {
-    "selftest": "node test/selftest.mjs"
-  },
+  "files": [
+    "index.js",
+    "src",
+    "locale",
+    "cordis.patch.yml",
+    "README.md",
+    "README_CN.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
   "keywords": [
-    "dsh",
     "dsh-plugin",
+    "deepseek-harness",
+    "dsh",
     "opencode",
     "free-model",
-    "llm-provider"
+    "llm-provider",
+    "model-provider",
+    "no-api-key"
   ],
   "engines": {
-    "node": "^22.19.0 || >=24.0.0"
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "check": "node scripts/check-syntax.mjs",
+    "test:bundle": "node scripts/bundle-manifest-check.mjs",
+    "test:classifier": "node test/classifier.mjs",
+    "test:settings": "node test/settings.mjs",
+    "test:contract": "node test/mock-runtime.mjs",
+    "test": "npm run check && npm run test:bundle && npm run test:classifier && npm run test:settings && npm run test:contract",
+    "test:live": "node test/live.mjs",
+    "test:live:quick": "node test/live.mjs --quick",
+    "test:kernel": "node scripts/kernel-contract-check.mjs",
+    "pack:check": "npm pack --dry-run",
+    "prepublishOnly": "npm run check && npm test && npm run pack:check",
+    "postpublish": "node scripts/sync-mirror.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.1",
+    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.6"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "dsh": {
     "bundle": {

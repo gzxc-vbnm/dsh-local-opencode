@@ -19,6 +19,13 @@ export function resolveDshHome() {
   return path.join(os.homedir(), '.dsh')
 }
 
+/**
+ * 运行时数据目录名（相对 dsh home）。
+ *
+ * 它必须与 npm 包名不同：安装位置按惯例是 ~/.dsh/<包名>（本包为 dsh-local-opencode），
+ * 同名就等于把用户设置写进包目录本身，重装或更新包时会连带删掉。参考插件
+ * dsh-our-free-model 的数据名正是分开的 our-free-model。
+ */
 export const DATA_DIR_NAME = 'local-opencode'
 
 export const DEFAULTS = Object.freeze({

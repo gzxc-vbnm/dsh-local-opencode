@@ -1,0 +1,18 @@
+# Normalize line endings: LF in the repository, whatever each platform prefers on
+# checkout. Without this, an autocrlf=true Windows contributor rewrites every file on
+# the next commit and the diff stops being reviewable.
+
+* text=auto eol=lf
+
+# Must stay byte-exact: shell and YAML are executed/parsed as-is on Linux runners.
+*.sh      text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+
+# Assets are binary; never let a filter touch them.
+*.png     binary
+*.jpg     binary
+*.svg     text
+
+# Lockfiles and vendored data are not for human diffs.
+pnpm-lock.yaml text eol=lf

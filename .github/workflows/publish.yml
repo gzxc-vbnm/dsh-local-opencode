@@ -1,0 +1,45 @@
+name: Publish
+
+# Cutting a tag is the release: the same gates CI runs on main have to pass first,
+# and the package is published with npm provenance so the registry records which
+# commit and run produced it.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write   # npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: gates (syntax, manifest, classifier, settings, adapter contract)
+        run: npm test
+      - name: pack (publish dry run)
+        run: npm pack --dry-run --pack-destination /tmp
+      - name: version matches the tag
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version=$(node -p "require('./package.json').version")
+          if [ "${tag#v}" != "$version" ]; then
+            echo "tag ${tag} does not match package.json version ${version}"
+            exit 1
+          fi
+          echo "publishing $version from ${tag}"
+      - name: npm publish
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+# postpublish asks npmmirror to sync, so `dsh plugin add dsh-local-opencode` works
+# from the default Chinese registry within about a minute of the release.

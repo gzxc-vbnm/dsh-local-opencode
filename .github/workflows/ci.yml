@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly canary against the moving harness prerelease. The harness is in developer
+    # preview and the llm adapter contract moves with it; this job fails early when a
+    # change would silently mis-behave under this plugin.
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      # The plugin has no dependencies by design: every module is plain Node plus relative
+      # imports, and harness services arrive through the cordis context. Nothing to install,
+      # and every suite is a plain node script.
+      - name: syntax gate
+        run: node scripts/check-syntax.mjs
+      - name: bundle manifest
+        run: node scripts/bundle-manifest-check.mjs
+      - name: failure classifier
+        run: node test/classifier.mjs
+      - name: settings layer (defaults, order, migration)
+        run: node test/settings.mjs
+      - name: adapter contract suite (fake cordis + fake opencode)
+        run: node test/mock-runtime.mjs
+      - name: pack (publish dry run)
+        run: npm pack --dry-run --pack-destination /tmp
+
+  kernel-contract:
+    name: harness llm contract (published harness)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: install the current published harness in isolation
+        run: |
+          harness_version=$(npm view @deepseek-ai/dsh@latest version --registry=https://registry.npmjs.org)
+          echo "harness $harness_version" >> "$GITHUB_STEP_SUMMARY"
+          npm install --prefix "$RUNNER_TEMP/dsh" --ignore-scripts --legacy-peer-deps --no-audit --no-fund \
+            --registry=https://registry.npmjs.org "@deepseek-ai/dsh@$harness_version"
+      - name: check the adapter contract this plugin implements
+        env:
+          DSH_ROOT: ${{ runner.temp }}/dsh
+        run: node scripts/kernel-contract-check.mjs
+
+  canary:
+    name: canary against dsh@next
+    if: github.event_name == "schedule" || github.event_name == "workflow_dispatch"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: install dsh@next in isolation
+        run: |
+          npm install --prefix "$RUNNER_TEMP/dsh-next" --ignore-scripts --legacy-peer-deps --no-audit --no-fund \
+            --registry=https://registry.npmjs.org "@deepseek-ai/dsh@next"
+      # The prerelease moves: a mismatch here is a warning, not a broken main branch.
+      - name: check the contract against the moving prerelease
+        env:
+          DSH_ROOT: ${{ runner.temp }}/dsh-next
+          CONTRACT_ALLOW_WARN: "1"
+        run: node scripts/kernel-contract-check.mjs

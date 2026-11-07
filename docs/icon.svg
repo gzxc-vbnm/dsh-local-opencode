@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Local OpenCode">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4d6bfe"/>
+      <stop offset="1" stop-color="#18c0b3"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="26" fill="url(#g)"/>
+  <rect x="24" y="30" width="80" height="54" rx="9" fill="#0e1116" opacity="0.9"/>
+  <path d="M38 47l11 9-11 9" fill="none" stroke="#7cf29c" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M58 73h24" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="93" cy="39" r="8" fill="#ffd166"/>
+  <path d="M40 98h48" fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round" opacity="0.55"/>
+  <text x="64" y="115" font-family="ui-monospace, monospace" font-size="13" fill="#ffffff" text-anchor="middle" opacity="0.9">localhost</text>
+</svg>

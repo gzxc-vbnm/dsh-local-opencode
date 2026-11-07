@@ -1,10 +1,26 @@
-# local-opencode bundle patch.
+# dsh-local-opencode bundle layer.
 #
-# 一行 insert 就挂载 Host 插件：name 必须是真实包名（cordis 按 name 去 import 包，
-# 写错会变成 Cannot find package），id 是这条 entry 的名字，config 直接进 apply(ctx, config)。
-# 想临时停掉模型通道：把 enabled 改成 false（路由不注册），或者整行 disabled: true。
+# `dsh plugin --profile <name> add dsh-local-opencode` appends this layer to the
+# profile's `dsh.profile.bundles`. It inserts ONE row that mounts the plugin with
+# its shipped defaults. `name` must be the real package name: cordis imports the
+# plugin by that string, so a wrong value surfaces as "Cannot find package".
+# Override any field from the profile's own `cordis.patch.yml` (a patch replaces
+# the whole `config`, so restate every key you keep):
+#
+#   - id: local-opencode
+#     config:
+#       enabled: true
+#       includePaid:
+#         githubCopilot: false
+#         others: false
+#       refreshMinutes: 30
+#       requestTimeoutMs: 180000
+#
+# Nothing here is a secret: the plugin reads the local opencode server's own
+# registration file (~/.local/state/opencode/service.json) at runtime, or the
+# OPENCODE_SERVER_URL / OPENCODE_SERVER_PASSWORD environment overrides.
 - insert:
     - id: local-opencode
-      name: local-opencode
+      name: dsh-local-opencode
       config:
         enabled: true

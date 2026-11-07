@@ -76,7 +76,9 @@ export function toCatalogEntry(entry) {
   const limit = entry.limit || {}
   const capabilities = entry.capabilities || {}
   const input = Array.isArray(capabilities.input) ? capabilities.input : ['text']
-  const modalities = input.includes('image') ? ['text', 'image'] : ['text']
+  // 如实声明：本插件走 opencode 的 stateless generate 通道，只送文本，像素到不了模型。
+  // 上游渠道自己支持什么写进 description，避免选择器把"支持图片"当成这条通道的能力。
+  const modalities = ['text']
   const effort = effortsFor(entry)
   const output = number(limit.output)
   const context = number(limit.context)
@@ -85,7 +87,7 @@ export function toCatalogEntry(entry) {
     isZeroCost(entry) ? '免费·零成本' : '计费',
     context ? '上下文 ' + Math.round(context / 1024) + 'K' : undefined,
     effort ? '思考档位 ' + effort.efforts.map(function (e) { return e.name }).join('/') : undefined,
-    input.length > 1 ? '输入 ' + input.join('/') : undefined,
+    input.length > 1 ? '上游支持 ' + input.join('/') + '（本通道仅文本）' : undefined,
     entry.status && entry.status !== 'active' ? entry.status : undefined,
   ].filter(Boolean).join(' · ')
   return {

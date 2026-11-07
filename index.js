@@ -47,6 +47,7 @@ ROUTE_LABELS[ROUTE_PAID] = ROUTE_PAID_LABEL
 
 export function apply(ctx, config) {
   const logger = ctx.logger ?? console
+  // 数据目录与包目录必须不同名：见 src/settings.js 的 DATA_DIR_NAME
   const settings = createSettings({ dataDir: path.join(resolveDshHome(), DATA_DIR_NAME), logger: logger, config: config })
   const state = createState()
   const settingsNs = (ctx.fiber && ctx.fiber.entry && ctx.fiber.entry.options && ctx.fiber.entry.options.id) || name

@@ -16,6 +16,16 @@
 import { CODE } from './errors.js'
 import { baseModelId, buildPrompt, estimateTokens } from './state.js'
 
+/** 每张图按 0 视觉 token + 占位文本计价：这条通道只送文本。 */
+const IMAGE_ONLY_TEXT_PRICING = Object.freeze({
+  priceImages(images) {
+    return (images || []).map(function (image) {
+      return image && image.offloaded === true
+        ? { visualTokens: 0, text: '[image omitted]' }
+        : { visualTokens: 0, text: '[图片未发送：本通道只送文本]' }
+    })
+  },
+})
 
 export class OpenCodeAdapter {
   /**
@@ -45,6 +55,26 @@ export class OpenCodeAdapter {
       maxDelayMs: 6000,
       jitterRatio: 0.2,
     })
+  }
+
+  /**
+   * 图像请求计价（内核的 token meter 会**无保护地**调用它）。
+   *
+   * 本插件只送文本，像素永不进请求，所以每张图都是 0 visualTokens + 我们实际发出的
+   * 占位文本。返回 undefined 会让内核放弃整条含图结果的落盘（issue #151 同类教训），
+   * 因此这里给一份同步、无 I/O 的估算而不是留空。
+   * @returns {{priceImages: (images: readonly object[]) => readonly {visualTokens: number, text: string}[]}}
+   */
+  imageRequestPricing() {
+    return IMAGE_ONLY_TEXT_PRICING
+  }
+
+  /**
+   * 图像请求投影目标。本插件不改写图像（根本不发图像），原样返回即可；
+   * 必须有这个方法：内核直接 adapter.imageRequestTarget(...)，缺了就是 TypeError。
+   */
+  imageRequestTarget(_provider, _model, image) {
+    return image
   }
 
   async listModels(provider) {
@@ -103,7 +133,7 @@ export class OpenCodeAdapter {
     const modelId = baseModelId(options.model)
     const entry = snapshot.catalog.find(function (candidate) { return candidate.id === modelId })
     if (entry === undefined) {
-      yield { type: 'finish', reason: { kind: 'error', failure: { message: 'local-opencode: 模型 ' + options.model + ' 不在本机 opencode 的目录里；先刷新模型目录或检查渠道是否已登录', code: CODE.NOT_FOUND } } }
+      yield { type: 'finish', reason: { kind: 'error', failure: { message: 'local-opencode: 模型 ' + options.model + ' 不在本机 opencode 的目录里；先刷新模型目录或检查渠道是否已登录', code: CODE.INVALID_REQUEST } } }
       return
     }
 
@@ -122,7 +152,7 @@ export class OpenCodeAdapter {
     // 思考档位就是 opencode 的 variant：内核传来什么档位，就用对应档位跑。
     const variant = typeof options.reasoningEffort === 'string' && options.reasoningEffort !== '' ? options.reasoningEffort : undefined
     if (variant !== undefined && entry.variants.length > 0 && entry.variants.indexOf(variant) < 0) {
-      yield { type: 'finish', reason: { kind: 'error', failure: { message: 'local-opencode: ' + entry.id + ' 不支持思考档位 ' + variant + '（可用：' + entry.variants.join('/') + '）', code: CODE.NOT_FOUND } } }
+      yield { type: 'finish', reason: { kind: 'error', failure: { message: 'local-opencode: ' + entry.id + ' 不支持思考档位 ' + variant + '（可用：' + entry.variants.join('/') + '）', code: CODE.INVALID_REQUEST } } }
       return
     }
 

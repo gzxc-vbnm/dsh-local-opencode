@@ -21,6 +21,7 @@ process.env.DSH_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'lo-test-'))
 
 const apiRoutes = []
 const fakeWebServer = { register: function (route) { apiRoutes.push(route); return function () { apiRoutes.length = 0 } } }
+const DATA_DIR = 'local-opencode'
 const registered = []
 let configurable = []
 let discovery = undefined
@@ -73,6 +74,27 @@ async function collect(options) {
   return out
 }
 
+const KERNEL_CODES = ['AUTH', 'RATE_LIMIT', 'QUOTA', 'ACCOUNT_QUOTA', 'SERVER', 'TIMEOUT', 'TRANSPORT', 'EMPTY_RESPONSE', 'INVALID_REQUEST', 'INVALID_CREDENTIAL', 'CONTEXT_WINDOW_EXCEEDED', 'IMAGE_OFFLOAD_REQUIRED', 'ABORTED', 'UNKNOWN']
+async function codesAreKernelKnown(adapterInstance, pluginHandle) {
+  const emitted = new Set()
+  const probes = [
+    { model: 'opencode/fake-free', reasoningEffort: 'ultra', messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] },
+    { model: 'opencode/nope', messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] },
+    { model: 'opencode/fake-free', messages: [{ role: 'user', content: [{ type: 'text', text: 'BOOM-429' }] }] },
+    { model: 'opencode/fake-free', messages: [{ role: 'user', content: [{ type: 'text', text: 'BOOM-REGION' }] }] },
+    { model: 'opencode/fake-free', messages: [{ role: 'user', content: [{ type: 'text', text: 'BOOM-EMPTY' }] }] },
+  ]
+  for (const probe of probes) {
+    for await (const chunk of adapterInstance.stream({ provider: 'local-opencode', ...probe })) {
+      if (chunk.type === 'finish' && chunk.reason.failure) emitted.add(chunk.reason.failure.code)
+    }
+  }
+  const unknown = [...emitted].filter((code) => KERNEL_CODES.includes(code) === false)
+  if (unknown.length > 0) console.log('     unknown codes: ' + JSON.stringify(unknown))
+  void pluginHandle
+  return unknown.length === 0
+}
+
 await handle.refreshCatalog({ force: true })
 
 const main = await adapter.listModels('local-opencode')
@@ -91,6 +113,17 @@ const viaPrepared = []
 for await (const chunk of prepared.stream({ provider: 'local-opencode', model: 'opencode/fake-free', messages: preparedMessages })) viaPrepared.push(chunk)
 check('prepared.stream 走的是一代快照并能出字', viaPrepared[viaPrepared.length - 1].reason.kind === 'stop', JSON.stringify(viaPrepared.map(function (c) { return c.type })))
 
+const SENTINEL = { type: 'image', attachment: { attachmentId: 'att_1' } }
+// 诚实的模态：这条通道只发文本。声明 image 会让内核把像素递给我们，
+// 而我们只会把它压成占位文本——选择器因此必须显示"仅文本"。
+check('inputModalities 如实声明为仅文本', JSON.stringify(main[0].inputModalities) === JSON.stringify(['text']), JSON.stringify(main[0].inputModalities))
+check('上游能力写进描述但不冒充本通道能力', /上游支持/.test(main[0].description) && /本通道仅文本/.test(main[0].description), main[0].description)
+// 内核会**无保护地**调用这两个图片方法：缺任何一个都会在含图请求上抛 TypeError。
+check('imageRequestPricing 已实现且同步返回估算', typeof adapter.imageRequestPricing === 'function' && adapter.imageRequestPricing('local-opencode', 'opencode/fake-free').priceImages([{ type: 'image' }, { type: 'image', offloaded: true }]).length === 2)
+const priced = adapter.imageRequestPricing('local-opencode', 'opencode/fake-free').priceImages([{ type: 'image' }])
+check('图片计价是 0 视觉 token + 文本占位（与只送文本一致）', priced[0].visualTokens === 0 && typeof priced[0].text === 'string' && priced[0].text.length > 0, JSON.stringify(priced[0]))
+check('imageRequestTarget 已实现且原样返回', typeof adapter.imageRequestTarget === 'function' && adapter.imageRequestTarget('local-opencode', 'opencode/fake-free', SENTINEL) === SENTINEL)
+
 const resolved = await adapter.resolveModel('local-opencode', 'opencode/fake-free')
 check('resolveModel.id 必须等于传入 model', resolved.id === 'opencode/fake-free', resolved.id)
 check('contextWindow 是正整数', Number.isInteger(resolved.context.contextWindow) && resolved.context.contextWindow > 0, JSON.stringify(resolved.context))
@@ -108,12 +141,13 @@ check('会话用完即删（不污染 opencode 历史）', mock.sessions.size ==
 check('usage 是不相交计数（估算而非上游）', good[3].usage.inputTokens > 0 && good[3].usage.outputTokens > 0 && good[3].usage.totalTokens === good[3].usage.inputTokens + good[3].usage.outputTokens, JSON.stringify(good[3].usage))
 
 const badEffort = await collect({ provider: 'local-opencode', model: 'opencode/fake-free', reasoningEffort: 'ultra', messages: messages })
-check('非法档位：本地拦下并说明可用档位', badEffort.length === 1 && badEffort[0].reason.kind === 'error' && /不支持思考档位/.test(badEffort[0].reason.failure.message), JSON.stringify(badEffort[0].reason.failure.message))
+check('非法档位：本地拦下并说明可用档位', badEffort.length === 1 && badEffort[0].reason.kind === 'error' && badEffort[0].reason.failure.code === 'INVALID_REQUEST' && /不支持思考档位/.test(badEffort[0].reason.failure.message), JSON.stringify(badEffort[0].reason.failure))
 
 const rate = await collect({ provider: 'local-opencode', model: 'opencode/fake-free', messages: [{ role: 'user', content: [{ type: 'text', text: 'BOOM-429' }] }] })
-check('上游 429 -> RATE_LIMIT', rate[rate.length - 1].reason.failure.code === 'RATE_LIMIT', JSON.stringify(rate[rate.length - 1].reason.failure))
+check('上游 429 + FreeUsageLimit -> QUOTA（终局额度，不是限速）', rate[rate.length - 1].reason.failure.code === 'QUOTA', JSON.stringify(rate[rate.length - 1].reason.failure))
 check('带上 provider 的退避时长', rate[rate.length - 1].reason.failure.providerRetryAfterMs === 60000, String(rate[rate.length - 1].reason.failure.providerRetryAfterMs))
-check('RATE_LIMIT 不进可重试集合（不把一次额度墙付三次）', adapter.providerRetryPolicy('local-opencode').retryableCodes.includes('RATE_LIMIT') === false)
+check('RATE_LIMIT 与 QUOTA 都不进可重试集合（不把一次额度墙付三次）', adapter.providerRetryPolicy('local-opencode').retryableCodes.includes('RATE_LIMIT') === false && adapter.providerRetryPolicy('local-opencode').retryableCodes.includes('QUOTA') === false)
+check('我们发出的每个 code 都在内核/官方适配器的词表里', await codesAreKernelKnown(adapter, handle))
 
 const region = await collect({ provider: 'local-opencode', model: 'opencode/fake-free', messages: [{ role: 'user', content: [{ type: 'text', text: 'BOOM-REGION' }] }] })
 check('区域拒绝 -> AUTH 且提示换出口', region[region.length - 1].reason.failure.code === 'AUTH' && /区域|出口/.test(region[region.length - 1].reason.failure.message), JSON.stringify(region[region.length - 1].reason.failure.message))
@@ -127,7 +161,7 @@ const cancelled = await collect({ provider: 'local-opencode', model: 'opencode/f
 check('取消收尾成 aborted', cancelled[cancelled.length - 1].reason.kind === 'aborted', JSON.stringify(cancelled[cancelled.length - 1].reason))
 
 const unknown = await collect({ provider: 'local-opencode', model: 'opencode/nope', messages: messages })
-check('目录外模型 -> NOT_FOUND 明确说明', unknown.length === 1 && unknown[0].reason.failure.code === 'NOT_FOUND', JSON.stringify(unknown[0].reason.failure))
+check('目录外模型 -> INVALID_REQUEST 明确说明', unknown.length === 1 && unknown[0].reason.failure.code === 'INVALID_REQUEST', JSON.stringify(unknown[0].reason.failure))
 
 const discovered = await discovery.fn({})
 check('模型发现返回带容量的候选', Array.isArray(discovered) && discovered.length === 1 && discovered[0].contextWindow === 200000, JSON.stringify(discovered))
@@ -152,7 +186,7 @@ check('关掉开关后计费组回到空组', (await adapter.listModels('local-o
 // 设置必须落盘：重启后配置不丢（同一次写入去抖 200ms，等一秒）。
 handle.settingsUpdate({ refreshMinutes: 0, requestTimeoutMs: 30000 })
 await new Promise(function (r) { setTimeout(r, 400) })
-const settingsFile = path.join(process.env.DSH_HOME, 'local-opencode', 'settings.json')
+const settingsFile = path.join(process.env.DSH_HOME, DATA_DIR, 'settings.json')
 const persisted = fs.existsSync(settingsFile) ? JSON.parse(fs.readFileSync(settingsFile, 'utf8')) : {}
 check('设置改动会落盘（重启后仍在）', persisted.includePaid.githubCopilot === false && persisted.refreshMinutes === 0 && persisted.requestTimeoutMs === 30000, JSON.stringify(persisted))
 check('未知设置键不会被写进去（normalize 白名单）', persisted.bogusKey === undefined && Object.keys(persisted).every(function (k) { return ['enabled', 'includePaid', 'refreshMinutes', 'requestTimeoutMs'].includes(k) }), JSON.stringify(Object.keys(persisted)))
