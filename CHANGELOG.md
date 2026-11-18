@@ -4,6 +4,62 @@ All notable changes to `dsh-local-opencode` are recorded here. The format follow
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x: minor bumps may change the settings shape).
 
+## [0.2.0] - 2026-11-18
+
+The plugin grows a second channel — opencode's own agent loop, with tools — and a
+sidebar panel to switch between them. The text channel and every 0.1.0 route keep
+working unchanged; nothing in the settings you already have is renamed.
+
+### Added
+- **Sidebar panel.** A `Local OpenCode` row in the sidebar (order 40, after the
+  built-in panels) opens a page with the two switches this release is about. The
+  browser half (`client.js`) registers into `sidebar.panellist` and `main`,
+  declared through `exports["./client"]` and `dsh.client.inject` in
+  `package.json`, so one bundle row mounts both halves at once.
+- **Per-model visibility.** Every catalog entry is listed with its provider, its
+  free/paid badge and its context window, each with a hide/show button. Hidden ids go
+  into `hiddenModels`, leave every route group, and stay in the catalog so they can
+  be brought back. The page deliberately does not update optimistically: what changes
+  is the picker's membership, and a wrong guess there is harder to trace than a slow
+  round-trip.
+- **Tool channel.** `channel: "agent"` sends the turn to opencode's own agent loop
+  (`POST /api/session/{id}/prompt` plus `GET /api/event`) instead of the stateless
+  `generate` call. The tools that run are opencode's, not `dsh`'s: the model can
+  read, write, grep and run commands inside a working directory you choose, and `dsh`
+  only ever sees the final text and reasoning. `dsh`'s own tool declarations stay
+  dropped on both lanes, which is why the channel is a setting rather than a default.
+- **Permission policies that are actually enforced.** `permissionMode` is
+  `allow-read` (default), `allow-all` or `reject`. Measured on opencode 2.3.0:
+  the `build` agent's default permission is `*=allow` and tools execute *silently*,
+  with no `permission.asked` event at all — so a plugin that merely *records* a policy
+  would be lying. This one sends `permissions` when it creates the session and answers
+  every `permission.asked` per policy: read/search/list actions `once` and everything
+  else `reject` under `allow-read`, nothing to answer under `allow-all` (tools just
+  run) or `reject` (the server refuses; verified the file was not written).
+- **Stream-death fallback.** opencode documents its event stream as volatile, so when
+  the stream ends before a terminal event the plugin reads the persisted assistant
+  message (`GET /api/session/{id}/message`) instead of reporting a transport failure.
+- **Routes** `/visibility`, `/channel`, `/agent-settings` and `/agents` behind
+  the same admission fence as the existing three.
+- **Two test suites.** `test/panel.mjs` (45 assertions) drives the sidebar routes and
+  both channels against the fake server, including all three permission policies and the
+  stream-death fallback; `test/client.mjs` (33) runs the browser bundle in a fake
+  window and asserts the seat registrations and both channel pages.
+- **Both-halves assertions** in `bundle-manifest-check.mjs` (43 checks now): the two
+  `exports` entries, `dsh.client.platform`, every seat provider named in
+  `dsh.client.inject`, and that no client fetch path starts with a root-absolute
+  `/api/` (the GUI serves the app from a sub-path, so those would escape it).
+
+### Changed
+- The settings file now holds ten keys instead of five; `DEFAULTS` in
+  `src/settings.js` is the single source of truth, and the contract suite reads it
+  instead of hard-coding a whitelist.
+- `statusView` reports `visibility`, `channel`, `permissionMode`,
+  `workingDirectory`, `agentName` and `agents` alongside the catalog, and
+  `POST /visibility` recomputes route membership and emits
+  `emitAdaptersUpdated` so the picker follows immediately.
+- `check-syntax.mjs` parses 21 modules (up from 16).
+
 ## [0.1.0] - 2026-11-07
 
 Initial release: the free models already configured in your local
@@ -47,7 +103,7 @@ Initial release: the free models already configured in your local
   minimal cordis context and a fake opencode server, covering every hard check the
   kernel performs on an adapter; `test/classifier.mjs` (16) pins the failure mapping
   branch by branch; `test/settings.mjs` (19) covers defaults, override order,
-  clamping and disk round-trip; `scripts/check-syntax.mjs` parses all 16 modules; and
+  clamping and disk round-trip; `scripts/check-syntax.mjs` parses all 16 modules (21 as of 0.2.0); and
   `scripts/bundle-manifest-check.mjs` asserts the bundle wiring that a profile needs.
   `scripts/kernel-contract-check.mjs` reads the published harness source and fails if
   the kernel starts calling an adapter method we lack, or if a chunk type or failure
@@ -57,7 +113,7 @@ Initial release: the free models already configured in your local
   genuine failure.
 
 ### Known limitations
-- **No function calling.** This lane is plain text: dsh's tool declarations are not
+- **No function calling in the text channel.** That lane is plain text: dsh's tool declarations are not
   forwarded, and history is flattened to text with a note telling the model not to
   announce tool calls. Use it for chat, writing and analysis, not as a coding agent.
   The trade buys zero side effects: no files touched, no credentials read, no

@@ -104,6 +104,7 @@ export function toCatalogEntry(entry) {
     variants: Array.isArray(entry.variants) ? entry.variants.map(function (v) { return String(v.id) }) : [],
     effort: effort,
     status: entry.status,
+    defaultVariant: entry.variants && entry.variants.length > 0 ? entry.variants[0] : undefined,
     enabled: entry.enabled !== false,
   }
 }
@@ -171,6 +172,46 @@ export function buildPrompt(options) {
   return lines.join('\n\n')
 }
 
+/**
+ * agent 道的 prompt：与文本道同构（历史压平成文本），但结尾说明不同。
+ *
+ * 文本道要告诉模型「别声称要调工具」；agent 道里工具确实会执行 —— 只是执行者是
+ * opencode，不是 dsh。所以这里说的是「工作目录与工具由 opencode 侧提供，dsh 声明的
+ * 工具不可用」，否则模型会以为 dsh 的工具能跑，产出没人接管的调用。
+ */
+export function buildAgentPrompt(options) {
+  const lines = []
+  let lastRole = ''
+  if (typeof options.system === 'string' && options.system.trim() !== '') {
+    lines.push('【系统】' + options.system.trim())
+    lastRole = 'system'
+  }
+  for (const message of options.messages || []) {
+    const text = flattenBlocks(message.content)
+    if (text === '') continue
+    if (message.role === 'system') { lines.push('【系统】' + text); lastRole = 'system'; continue }
+    if (message.role === 'developer') { lines.push('【开发者】' + text); lastRole = 'developer'; continue }
+    if (message.role === 'tool') { lines.push('【工具 ' + (message.toolCallId || '') + ' 的结果】' + text); lastRole = 'tool'; continue }
+    if (message.role === 'user') {
+      if (lastRole === 'system') lines.push('【接上文】')
+      lines.push(text)
+      lastRole = 'user'
+      continue
+    }
+    lines.push('【助手上一轮】' + text)
+    lastRole = 'assistant'
+  }
+  lines.push(AGENT_NOTICE)
+  return lines.join('\n\n')
+}
+
+/** agent 道结尾说明：工具由 opencode 执行，dsh 侧声明的那套不可用。 */
+export const AGENT_NOTICE = [
+  '说明：本轮由本机 opencode 的 agent 执行。你可以请求读写文件与执行命令，它们会由 opencode',
+  '在它自己的工作目录里真实运行（受插件的权限设置约束，越权的动作会被自动拒绝）。',
+  'dsh 侧声明的工具在这一道不可用，不要尝试调用它们；需要外部信息时直接说明缺什么。',
+].join('\n')
+
 export function estimateTokens(text) {
   // 粗略：CJK 约 1 token/字，其余约 4 字符/token。上游不回报 usage，所以只能估算。
   let cjk = 0
@@ -191,23 +232,71 @@ export function createState() {
     /** 目录（opencode 全量模型，含不计费的）。 */
     catalog: [],
     /** 路由成员表：{ [route]: string[] } */
-    membership: { ROUTE: [], PAID: [] },
+    membership: { 'local-opencode': [], 'local-opencode-paid': [] },
     connection: { status: 'idle', message: '还没连过本机 opencode', at: 0, source: undefined, version: undefined },
     lastRefresh: undefined,
     refreshing: undefined,
+    /** agent 目录缓存：侧栏下拉用，不参与模型成员表。 */
+    agents: undefined,
   }
 }
 
 export function membershipFor(catalog, settings) {
   const paid = settings.includePaid || {}
+  // 侧栏「显示/不显示」写进 hiddenModels；它优先于 includePaid，因为用户的显隐
+  // 意图比「这一类要不要收」更具体（includePaid=true 也不能把被点名隐藏的模型放回来）。
+  const hidden = new Set(Array.isArray(settings.hiddenModels) ? settings.hiddenModels : [])
   const main = []
   const paidRoute = []
   for (const entry of catalog) {
     if (entry.enabled === false) continue
     if (entry.status === 'deprecated') continue
+    if (hidden.has(entry.id)) continue
     if (entry.free) { if (main.indexOf(entry.id) < 0) main.push(entry.id); continue }
     const want = entry.providerID === 'github-copilot' ? paid.githubCopilot : paid.others
     if (want && paidRoute.indexOf(entry.id) < 0) paidRoute.push(entry.id)
   }
   return { 'local-opencode': main, 'local-opencode-paid': paidRoute }
+}
+
+/**
+ * 侧栏要渲染的完整清单：目录里每一个模型，标出它在哪个分组、是否被隐藏。
+ *
+ * 单靠 membership 无法渲染「不显示」按钮，因为隐藏的模型根本不在 membership 里；
+ * 界面需要的是「所有可隐藏项 + 当前可见性」，所以这里按同一套规则再走一遍，但
+ * 不丢掉被隐藏的项。可见性判定必须与 membershipFor 同源，否则界面与选择器会说谎。
+ */
+export function visibilityRows(catalog, settings) {
+  const paid = settings.includePaid || {}
+  const hidden = new Set(Array.isArray(settings.hiddenModels) ? settings.hiddenModels : [])
+  const rows = []
+  for (const entry of catalog) {
+    if (entry.enabled === false || entry.status === 'deprecated') {
+      rows.push(row(entry, 'unavailable', hidden.has(entry.id)))
+      continue
+    }
+    if (hidden.has(entry.id)) { rows.push(row(entry, 'hidden', true)); continue }
+    if (entry.free) { rows.push(row(entry, 'free', false)); continue }
+    const want = entry.providerID === 'github-copilot' ? paid.githubCopilot : paid.others
+    rows.push(row(entry, want ? 'paid' : 'unlisted', false))
+  }
+  return rows
+}
+
+function row(entry, group, hidden) {
+  return {
+    id: entry.id,
+    name: entry.name,
+    provider: entry.providerID,
+    free: entry.free === true,
+    group: group,
+    hidden: hidden === true,
+    // 只有真的进了某个路由分组的模型才能被拨回来；unlisted 的模型是「计费但未纳入」，
+    // 侧栏对它只读，避免点一下就把计费模型塞进选择器。
+    toggleable: group === 'free' || group === 'paid' || group === 'hidden',
+    contextWindow: entry.contextWindow,
+    modalities: entry.modalities,
+    variants: entry.variants,
+    description: entry.description,
+  }
 }

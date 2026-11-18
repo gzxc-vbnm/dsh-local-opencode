@@ -1,6 +1,6 @@
 {
   "name": "dsh-local-opencode",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local OpenCode plugin for DeepSeek Harness (dsh): discovers the opencode server already running on this machine and registers its zero-cost free models (Big Pickle, DeepSeek V4.1 Flash Free, GLM-5.3-Flash Free and friends) as a model provider, so the dsh model picker can select them directly. No login, no API key.",
   "type": "module",
   "license": "MIT",
@@ -20,6 +20,7 @@
   "main": "./index.js",
   "exports": {
     ".": "./index.js",
+    "./client": "./client.js",
     "./package.json": "./package.json"
   },
   "files": [
@@ -30,7 +31,8 @@
     "README.md",
     "README_CN.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "client.js"
   ],
   "sideEffects": false,
   "keywords": [
@@ -52,13 +54,15 @@
     "test:classifier": "node test/classifier.mjs",
     "test:settings": "node test/settings.mjs",
     "test:contract": "node test/mock-runtime.mjs",
-    "test": "npm run check && npm run test:bundle && npm run test:classifier && npm run test:settings && npm run test:contract",
+    "test": "npm run check && npm run test:bundle && npm run test:classifier && npm run test:settings && npm run test:contract && npm run test:panel && npm run test:client",
     "test:live": "node test/live.mjs",
     "test:live:quick": "node test/live.mjs --quick",
     "test:kernel": "node scripts/kernel-contract-check.mjs",
     "pack:check": "npm pack --dry-run",
     "prepublishOnly": "npm run check && npm test && npm run pack:check",
-    "postpublish": "node scripts/sync-mirror.mjs"
+    "postpublish": "node scripts/sync-mirror.mjs",
+    "test:panel": "node test/panel.mjs",
+    "test:client": "node test/client.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.1",
@@ -77,8 +81,19 @@
     "registry": "https://registry.npmjs.org/"
   },
   "dsh": {
+    "engines": {
+      "dsh": ">=0.2.2-rc.1"
+    },
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
     }
   }
 }

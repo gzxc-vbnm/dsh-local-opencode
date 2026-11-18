@@ -20,11 +20,11 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { CODE, OpenCodeError } from './src/errors.js'
-import { DATA_DIR_NAME, DEFAULTS, createSettings, resolveDshHome } from './src/settings.js'
+import { CHANNELS, DATA_DIR_NAME, DEFAULTS, PERMISSION_MODES, createSettings, resolveDshHome } from './src/settings.js'
 import { discoverOpenCode } from './src/discovery.js'
 import { OpenCodeClient } from './src/client.js'
 import { OpenCodeAdapter } from './src/adapter.js'
-import { ROUTE, ROUTE_LABEL, ROUTE_PAID, ROUTE_PAID_LABEL, createState, membershipFor, toCatalogEntry } from './src/state.js'
+import { ROUTE, ROUTE_LABEL, ROUTE_PAID, ROUTE_PAID_LABEL, createState, membershipFor, toCatalogEntry, visibilityRows } from './src/state.js'
 
 export const name = 'local-opencode'
 
@@ -37,6 +37,10 @@ function readPackageVersion() {
 export const version = readPackageVersion()
 
 export const inject = ['llm']
+
+/** 界面枚举用：通道与权限策略的全部合法取值。 */
+const CHANNELS_LIST = [CHANNELS.text, CHANNELS.agent]
+const PERMISSION_MODES_LIST = [PERMISSION_MODES.allowRead, PERMISSION_MODES.allowAll, PERMISSION_MODES.reject]
 
 /** 同机调用者可用的主机名（围栏的结构副本用）。 */
 const LOOPBACK = ['127.0.0.1', '[::1]', '::1', 'localhost']
@@ -91,6 +95,20 @@ export function apply(ctx, config) {
     return clientPromise
   }
 
+  /**
+   * 按当前设置重算路由成员。
+   *
+   * 侧栏的「显示/不显示」只改 hiddenModels，成员表必须同步重算，否则按钮点了没效果。
+   * 两条路由常驻不撤，适配器每次 listModels 都重读成员表；但宿主得知道拓扑变了，
+   * 否则 GUI 会一直显示它缓存的那份列表。老内核没这个方法就等下一次自然刷新。
+   */
+  function recomputeMembership() {
+    state.membership = membershipFor(state.catalog, settings.get())
+    try {
+      if (typeof ctx.llm.emitAdaptersUpdated === 'function') ctx.llm.emitAdaptersUpdated()
+    } catch { /* 观察者故障不得否决成员表更新 */ }
+    return state.membership
+  }
   async function refreshCatalog(_options) {
     const options = _options || {}
     if (state.refreshing !== undefined && options.force !== true) return state.refreshing
@@ -100,7 +118,7 @@ export function apply(ctx, config) {
         const raw = await active.listModels(settings.get().requestTimeoutMs, undefined)
         const catalog = raw.map(toCatalogEntry)
         state.catalog = catalog
-        state.membership = membershipFor(catalog, settings.get())
+        recomputeMembership()
         // "可用"按路由成员数算：enabled=false 或 deprecated 的模型在目录里但不进选择器。
         const usable = (state.membership[ROUTE] || []).length
         state.lastRefresh = { at: Date.now(), models: catalog.length, free: usable, listed: catalog.filter(function (e) { return e.free }).length }
@@ -191,10 +209,10 @@ export function apply(ctx, config) {
     logger.info && logger.info('local-opencode: 状态面板 API 挂在 /api/local-opencode')
   })
 
-  function statusView() {
+  function statusView(overrides) {
     return {
       plugin: { name: name, version: version },
-      settings: settings.get(),
+      settings: Object.assign({}, settings.get(), overrides || {}),
       defaults: DEFAULT_SETTINGS_VIEW,
       connection: state.connection,
       lastRefresh: state.lastRefresh,
@@ -202,6 +220,15 @@ export function apply(ctx, config) {
         return { id: entry.id, name: entry.name, provider: entry.providerID, free: entry.free, modalities: entry.modalities, contextWindow: entry.contextWindow, maxOutput: entry.maxOutput, variants: entry.variants, status: entry.status, enabled: entry.enabled }
       }),
       membership: state.membership,
+      // 侧栏渲染用的完整清单：必须含被隐藏的项，否则那批在界面上消失、拨不回来。
+      visibility: visibilityRows(state.catalog, settings.get()),
+      channel: settings.get().channel,
+      channels: CHANNELS_LIST,
+      permissionMode: settings.get().permissionMode,
+      permissionModes: PERMISSION_MODES_LIST,
+      workingDirectory: settings.get().workingDirectory,
+      agentName: settings.get().agentName,
+      agents: state.agents || [],
       routes: routes,
       registered: registration !== undefined,
       lastError: lastError,
@@ -278,7 +305,75 @@ export function apply(ctx, config) {
         return
       } catch (error) { json(res, 502, { ok: false, error: describeError(error), code: error && error.code }) }
     }
+    if (req.method === 'POST' && pathname === '/api/local-opencode/visibility') {
+      const patch = await readJson(req, res)
+      if (patch === undefined) return
+      const id = typeof patch.id === 'string' ? patch.id.trim() : ''
+      if (id === '') { json(res, 400, { error: '缺少模型 id' }); return }
+      // 只认目录里的 id：否则一个拼错的 id 会安静地塞进隐藏清单，永远没人看见它。
+      if (state.catalog.some(function (entry) { return entry.id === id }) === false) {
+        json(res, 404, { error: '模型不在本机 opencode 的目录里：' + id }); return
+      }
+      const wantHidden = patch.hidden === true
+      const current = settings.get().hiddenModels.slice()
+      const at = current.indexOf(id)
+      if (wantHidden === true && at < 0) current.push(id)
+      if (wantHidden === false && at >= 0) current.splice(at, 1)
+      settings.updateNow({ hiddenModels: current })
+      recomputeMembership()
+      json(res, 200, statusView())
+      return
+    }
+    if (req.method === 'POST' && pathname === '/api/local-opencode/channel') {
+      const patch = await readJson(req, res)
+      if (patch === undefined) return
+      const before = settings.get().channel
+      const now = settings.updateNow({ channel: patch.channel })
+      // 通道是每轮现读的（适配器 dispatch 里判 channel），所以这里无需重启。
+      json(res, 200, Object.assign({}, statusView(), { changed: before !== now.channel }))
+      return
+    }
+    if (req.method === 'POST' && pathname === '/api/local-opencode/agent-settings') {
+      const patch = await readJson(req, res)
+      if (patch === undefined) return
+      const next = {}
+      if (patch.permissionMode !== undefined) next.permissionMode = patch.permissionMode
+      if (patch.agentName !== undefined) next.agentName = patch.agentName
+      if (patch.workingDirectory !== undefined) {
+        const dir = typeof patch.workingDirectory === 'string' ? patch.workingDirectory.trim() : ''
+        // 空值是合法的（沿用 opencode 服务自己的位置）；非空就必须真的存在，
+        // 否则工具会在一个不存在的项目里跑，报错信息还不指向这里。
+        if (dir !== '' && fs.existsSync(dir) === false) {
+          json(res, 400, { error: '工作目录不存在：' + dir }); return
+        }
+        next.workingDirectory = dir
+      }
+      json(res, 200, statusView(Object.assign({}, settings.updateNow(next), {})))
+      return
+    }
+    if (req.method === 'GET' && pathname === '/api/local-opencode/agents') {
+      try {
+        const active = await ensureClient()
+        const raw = await active.listAgents(settings.get().requestTimeoutMs, undefined)
+        state.agents = raw.filter(function (a) { return a && typeof a.id === 'string' && a.hidden !== true }).map(function (a) {
+          return { id: a.id, name: a.name || a.id, description: a.description || '' }
+        })
+        json(res, 200, { agents: state.agents })
+      } catch (error) { json(res, 502, { error: describeError(error) }) }
+      return
+    }
+
     json(res, 404, { error: 'not found: ' + req.method + ' ' + pathname })
+  }
+
+  /** 读 body 并解析 JSON；不合法时自己发 400，返回 undefined 让调用方直接 return。 */
+  async function readJson(req, res) {
+    let raw
+    try { raw = await readBody(req) } catch (error) { json(res, 400, { error: 'body 读不出来：' + String((error && error.message) || error) }); return undefined }
+    let parsed
+    try { parsed = JSON.parse(raw || '{}') } catch { json(res, 400, { error: 'body 不是合法 JSON' }); return undefined }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) { json(res, 400, { error: 'body 需要是 JSON 对象' }); return undefined }
+    return parsed
   }
 
   function readBody(req) {
@@ -291,5 +386,14 @@ export function apply(ctx, config) {
     })
   }
 
-  return { statusView: statusView, refreshCatalog: refreshCatalog, settingsUpdate: function (patch) { return settings.update(patch) }, settings: settings, adapter: adapter }
+  return {
+    statusView: statusView,
+    refreshCatalog: refreshCatalog,
+    settingsUpdate: function (patch) { return settings.update(patch) },
+    settings: settings,
+    adapter: adapter,
+    recomputeMembership: recomputeMembership,
+    // 面板处理器暴露出来，好让契约测试直接打这些路由（生产路径由 webServer 调用）。
+    api: api,
+  }
 }

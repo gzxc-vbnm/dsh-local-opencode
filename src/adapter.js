@@ -1,22 +1,25 @@
 /**
- * dsh 的 llm 适配器：把一次 GenerateOptions 变成 opencode 本机的一次生成。
+ * dsh 的 llm 适配器：把一次 GenerateOptions 变成本机 opencode 的一次生成。
  *
- * 结构上满足 LlmAdapter 契约即可（registerAdapter 是靠调用方法校验的，不做 instanceof），
+ * 结构上满足 LlmAdapter 契约即可（registerAdapter 靠调用方法校验，不做 instanceof），
  * 所以这里不 import '@deepseek-ai/dsh-llm'，跨内核版本更稳。
  *
- * 会话生命周期绑在这一轮上：create -> /model（带 variant）-> generate -> delete。
- * 目录在 prepareCall 时冻结成快照，中途刷新不会把上一代的档位表接到这一代的调用上。
+ * 两条通道（设置里的 channel，侧栏可切）：
+ *  - text  无状态 session/generate：一次进一次出，永远没有工具，零副作用。
+ *  - agent opencode 的 agent 循环：工具在它的工作目录里真的执行，权限由插件代答。
+ * 两条道共用同一份目录与同一套档位校验，所以校验放在分叉之前，只此一处。
  *
- * 取消：fetch 走 AbortSignal.any([timeout, 外层 signal])，外层取消即中断；随后尽力
- * POST /interrupt 让 opencode 也停手，最后仍会删除会话。
+ * 会话生命周期绑在这一轮上；目录在 prepareCall 时冻结成快照，中途刷新不会把
+ * 上一代的档位表接到这一代的调用上。
  *
  * @module src/adapter.js
  */
 
 import { CODE } from './errors.js'
-import { baseModelId, buildPrompt, estimateTokens } from './state.js'
+import { baseModelId, buildAgentPrompt, buildPrompt, estimateTokens } from './state.js'
+import { AgentLane } from './agent-lane.js'
 
-/** 每张图按 0 视觉 token + 占位文本计价：这条通道只送文本。 */
+/** 每张图按 0 视觉 token + 占位文本计价：两条通道都只送文本。 */
 const IMAGE_ONLY_TEXT_PRICING = Object.freeze({
   priceImages(images) {
     return (images || []).map(function (image) {
@@ -27,14 +30,35 @@ const IMAGE_ONLY_TEXT_PRICING = Object.freeze({
   },
 })
 
+/** 一个纯失败收尾 chunk。 */
+function failureChunk(failure) {
+  return { type: 'finish', reason: { kind: 'error', failure: failure } }
+}
+
+/** 取消归 aborted，其余归 error；两条都带完整 failure。 */
+function abortedOrError(options, error, fallbackCode) {
+  if (options.signal && options.signal.aborted) {
+    return { type: 'finish', reason: { kind: 'aborted', failure: { message: 'local-opencode: 请求已取消', code: CODE.ABORTED } } }
+  }
+  const failure = error && error.failure
+    ? error.failure
+    : { message: String((error && error.message) || error), code: fallbackCode || CODE.UNKNOWN }
+  return { type: 'finish', reason: { kind: 'error', failure: failure } }
+}
+
 export class OpenCodeAdapter {
   /**
    * @param {{state: () => object, settings: () => object,
    *          routeLabels: Record<string, string>, logger?: object,
-   *          ensureClient: () => Promise<object>, onUpstreamFailure: (error: Error) => void}} deps
+   *          ensureClient: () => Promise<object>, onUpstreamFailure: (error: object) => void}} deps
    */
   constructor(deps) {
     this.deps = deps
+    this.lane = new AgentLane({
+      settings: deps.settings,
+      logger: deps.logger,
+      prompt: buildAgentPrompt,
+    })
   }
 
   providerInfo(provider) {
@@ -42,9 +66,9 @@ export class OpenCodeAdapter {
   }
 
   /**
-   * 完整策略对象（不是配置片段）：内核把这里的返回值原样存进注册表，退避调度直接读顶层字段。
-   * 故意不把 RATE_LIMIT / AUTH 放进可重试集合：额度墙与区域拒绝是出口的事实，
-   * 同一轮重试三次只会把一次配额变成三次（同 dsh-our-free-model 的判断）。
+   * 完整策略对象（不是配置片段）：内核把这里的返回值原样存进注册表，退避调度直接读
+   * 顶层字段。故意不把 AUTH / RATE_LIMIT / QUOTA 放进可重试集合：区域拒绝与额度墙是
+   * 出口的事实，同一轮重试三次只会把一次配额变成三次。
    */
   providerRetryPolicy() {
     return Object.freeze({
@@ -58,21 +82,14 @@ export class OpenCodeAdapter {
   }
 
   /**
-   * 图像请求计价（内核的 token meter 会**无保护地**调用它）。
-   *
-   * 本插件只送文本，像素永不进请求，所以每张图都是 0 visualTokens + 我们实际发出的
-   * 占位文本。返回 undefined 会让内核放弃整条含图结果的落盘（issue #151 同类教训），
-   * 因此这里给一份同步、无 I/O 的估算而不是留空。
-   * @returns {{priceImages: (images: readonly object[]) => readonly {visualTokens: number, text: string}[]}}
+   * 图像请求计价。内核的 token meter 会无保护地调它，缺了就是 TypeError；
+   * 返回 undefined 会让内核放弃整条含图结果的落盘，所以给一份同步、无 I/O 的估算。
    */
   imageRequestPricing() {
     return IMAGE_ONLY_TEXT_PRICING
   }
 
-  /**
-   * 图像请求投影目标。本插件不改写图像（根本不发图像），原样返回即可；
-   * 必须有这个方法：内核直接 adapter.imageRequestTarget(...)，缺了就是 TypeError。
-   */
+  /** 本插件不改写图像（根本不发图像），原样返回；内核同样是无保护调用，必须有。 */
   imageRequestTarget(_provider, _model, image) {
     return image
   }
@@ -129,60 +146,111 @@ export class OpenCodeAdapter {
     }
   }
 
-  async * runStream(options, snapshot) {
+  /**
+   * 两条通道的公共前段：定位目录行、拿到 client、校验档位。
+   * 失败就地 yield 终止 chunk 并结束；成功返回 {entry, client, variant}。
+   */
+  async * dispatch(options, snapshot) {
     const modelId = baseModelId(options.model)
     const entry = snapshot.catalog.find(function (candidate) { return candidate.id === modelId })
     if (entry === undefined) {
-      yield { type: 'finish', reason: { kind: 'error', failure: { message: 'local-opencode: 模型 ' + options.model + ' 不在本机 opencode 的目录里；先刷新模型目录或检查渠道是否已登录', code: CODE.INVALID_REQUEST } } }
+      yield failureChunk({
+        message: 'local-opencode: 模型 ' + options.model + ' 不在本机 opencode 的目录里；先刷新模型目录或检查渠道是否已登录',
+        code: CODE.INVALID_REQUEST,
+      })
       return
     }
 
-    const settings = this.deps.settings()
     let client
     try {
       client = await this.deps.ensureClient()
     } catch (error) {
       this.deps.onUpstreamFailure(error)
-      const failure = error && error.failure ? error.failure : { message: String((error && error.message) || error), code: CODE.TRANSPORT }
-      yield { type: 'finish', reason: { kind: options.signal && options.signal.aborted ? 'aborted' : 'error', failure: failure } }
+      const aborted = options.signal && options.signal.aborted
+      yield abortedOrError(options, error, CODE.TRANSPORT)
       return
     }
 
-    const prompt = buildPrompt(options)
     // 思考档位就是 opencode 的 variant：内核传来什么档位，就用对应档位跑。
     const variant = typeof options.reasoningEffort === 'string' && options.reasoningEffort !== '' ? options.reasoningEffort : undefined
-    if (variant !== undefined && entry.variants.length > 0 && entry.variants.indexOf(variant) < 0) {
-      yield { type: 'finish', reason: { kind: 'error', failure: { message: 'local-opencode: ' + entry.id + ' 不支持思考档位 ' + variant + '（可用：' + entry.variants.join('/') + '）', code: CODE.INVALID_REQUEST } } }
+    if (variant !== undefined && Array.isArray(entry.variants) && entry.variants.length > 0 && entry.variants.indexOf(variant) < 0) {
+      yield failureChunk({
+        message: 'local-opencode: ' + entry.id + ' 不支持思考档位 ' + variant + '（可用：' + entry.variants.join('/') + '）',
+        code: CODE.INVALID_REQUEST,
+      })
       return
     }
 
+    return { entry: entry, client: client, variant: variant }
+  }
+
+  async * runStream(options, snapshot) {
+    const prepared = yield * this.dispatch(options, snapshot)
+    // dispatch 已经自己发完终止 chunk（或没找到可继续的东西）时，prepared 是 undefined。
+    if (prepared === undefined) return
+    const entry = prepared.entry
+    const client = prepared.client
+    const variant = prepared.variant
+
+    if (this.deps.settings().channel === 'agent') {
+      yield * this.runAgent(options, entry, client, variant)
+      return
+    }
+    yield * this.runText(options, entry, client, variant)
+  }
+
+  /** agent 道一轮：交给 AgentLane（会话与事件流的生死都在那里收尾）。 */
+  async * runAgent(options, entry, client, variant) {
+    try {
+      for await (const chunk of this.lane.run(options, entry, client, variant)) {
+        // 传输级失败要让宿主知道链路可能断了，别的（额度/区域）只是这一轮的事实。
+        if (chunk.type === 'finish' && chunk.reason.kind === 'error') {
+          const code = chunk.reason.failure && chunk.reason.failure.code
+          if (code === CODE.TRANSPORT || code === CODE.TIMEOUT || code === CODE.SERVER) this.deps.onUpstreamFailure({ code: code, failure: chunk.reason.failure })
+        }
+        yield chunk
+      }
+    } catch (error) {
+      if (options.signal && options.signal.aborted) {
+        yield { type: 'finish', reason: { kind: 'aborted', failure: { message: 'local-opencode: 请求已取消', code: CODE.ABORTED } } }
+        return
+      }
+      this.deps.onUpstreamFailure(error)
+      const failure = error && error.failure ? error.failure : { message: String((error && error.message) || error), code: CODE.UNKNOWN }
+      yield { type: 'finish', reason: { kind: 'error', failure: failure } }
+    }
+  }
+
+  /** 文本道一轮：建会话 → 设模型档位 → 无状态生成 → 删会话。 */
+  async * runText(options, entry, client, variant) {
+    const settings = this.deps.settings()
     const timeoutMs = settings.requestTimeoutMs
     let sessionId
     try {
       sessionId = await client.createSession('dsh:local-opencode', timeoutMs, options.signal)
     } catch (error) {
-      // 建会话失败也要走统一的收尾，不向内核抛：取消归 aborted，其余归 error。
+      // 建会话失败也走统一收尾，不向内核抛：取消归 aborted，其余归 error。
       this.deps.onUpstreamFailure(error)
-      const aborted = options.signal && options.signal.aborted
-      yield { type: 'finish', reason: { kind: aborted ? 'aborted' : 'error', failure: aborted ? { message: 'local-opencode: 请求已取消', code: CODE.ABORTED } : (error && error.failure ? error.failure : { message: String((error && error.message) || error), code: CODE.UNKNOWN }) } }
+      yield abortedOrError(options, error, CODE.UNKNOWN)
       return
     }
 
-    let closed = false
+    let cleaned = false
     const cleanup = async () => {
-      if (closed) return
-      closed = true
+      if (cleaned) return
+      cleaned = true
       if (options.signal && options.signal.aborted) await client.interrupt(sessionId)
       await client.deleteSession(sessionId, 15000)
     }
 
     try {
+      const prompt = buildPrompt(options)
       await client.selectModel(sessionId, { id: entry.modelID, providerID: entry.providerID }, variant, timeoutMs, options.signal)
       const result = await client.generate(sessionId, prompt, timeoutMs, options.signal)
 
       if (result.text.trim() === '') {
         // 空答在内核 taxonomy 里是可重试的独立事实，不伪装成正常收尾。
-        yield { type: 'finish', reason: { kind: 'error', failure: { message: 'local-opencode: ' + entry.name + ' 这一轮没给出任何内容', code: 'EMPTY_RESPONSE' } } }
+        yield { type: 'finish', reason: { kind: 'error', failure: { message: 'local-opencode: ' + entry.name + ' 这一轮没给出任何内容', code: CODE.EMPTY_RESPONSE } } }
         return
       }
 
@@ -206,4 +274,3 @@ export class OpenCodeAdapter {
     }
   }
 }
-

@@ -12,6 +12,7 @@ import os from 'node:os'
 import fs from 'node:fs'
 import path from 'node:path'
 import { startMockServer } from './mock-server.mjs'
+import { DEFAULTS } from '../src/settings.js'
 
 const mock = await startMockServer()
 process.env.OPENCODE_SERVER_URL = mock.url
@@ -189,7 +190,9 @@ await new Promise(function (r) { setTimeout(r, 400) })
 const settingsFile = path.join(process.env.DSH_HOME, DATA_DIR, 'settings.json')
 const persisted = fs.existsSync(settingsFile) ? JSON.parse(fs.readFileSync(settingsFile, 'utf8')) : {}
 check('设置改动会落盘（重启后仍在）', persisted.includePaid.githubCopilot === false && persisted.refreshMinutes === 0 && persisted.requestTimeoutMs === 30000, JSON.stringify(persisted))
-check('未知设置键不会被写进去（normalize 白名单）', persisted.bogusKey === undefined && Object.keys(persisted).every(function (k) { return ['enabled', 'includePaid', 'refreshMinutes', 'requestTimeoutMs'].includes(k) }), JSON.stringify(Object.keys(persisted)))
+// 白名单取自真实的 DEFAULTS，而不是在这里抄一份键名清单：抄的那份会随设置增长而
+// 悄悄过期，然后以一个与本意无关的失败告终（它已经这样失败过一次）。
+check('未知设置键不会被写进去（normalize 白名单）', persisted.bogusKey === undefined && Object.keys(persisted).every(function (k) { return Object.prototype.hasOwnProperty.call(DEFAULTS, k) }), JSON.stringify(Object.keys(persisted).filter(function (k) { return Object.prototype.hasOwnProperty.call(DEFAULTS, k) === false })))
 
 // opencode 关掉时：路由必须还在，调用给出可读的失败，插件不炸。
 await mock.close()

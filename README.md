@@ -21,6 +21,26 @@ while the *same model* answers in about 1.5 seconds when the request goes throug
 
 So the plugin is a bridge to your local opencode, not a second client for its upstream.
 
+## Two channels, and why the safe one is the default
+
+| | text only (default) | agent (with tools) |
+|---|---|---|
+| Endpoint | `POST /api/session/{id}/generate` | `POST /api/session/{id}/prompt` + `GET /api/event` |
+| Tools | none, ever | opencode's own: read, write, bash, grep ... |
+| Side effects | none | **really reads and writes your files** |
+| Reasoning blocks | no | yes, streamed separately |
+| Streaming | one whole payload | event stream: text, reasoning, step, usage, permission |
+
+The text channel is the default because it is the one with no blast radius: it takes a prompt and returns text, and nothing on your disk can change. The agent channel is a different lane entirely — opencode runs its own tool loop in a working directory you choose, and `dsh` only ever sees the final text and reasoning. That is genuinely useful for work that needs the filesystem, and it is exactly why the plugin does not enable it silently.
+
+**The permission policy is not decoration.** Measured on opencode 2.3.0: the `build` agent's default permission is `*=allow`, and tools execute *silently* — no `permission.asked` event is emitted at all. A plugin that only *reports* a permission setting would therefore be lying. This one sends `permissions` when it creates the session:
+
+| Policy | Sent at session creation | On each `permission.asked` |
+|---|---|---|
+| Read only (default) | `{action:"*", effect:"ask"}` | read/search/list actions answered `once`; everything else `reject` |
+| Allow everything | `{action:"*", effect:"allow"}` | nothing to answer — tools just run |
+| Reject everything | `{action:"*", effect:"deny"}` | nothing to answer — the server refuses (verified: the file was not written) |
+
 ## What you get
 
 | | |
@@ -30,7 +50,9 @@ So the plugin is a bridge to your local opencode, not a second client for its up
 | **Reasoning effort** | mapped onto opencode model variants (`low` / `high` / `max` …); only the variants the catalog declares are offered |
 | **Context and output caps** | read from the catalog, so `dsh` budgets and compaction see the real numbers |
 | **Failure reporting** | region blocks, quota walls and rate limits surface as their own codes with the provider's backoff, and are deliberately not retried |
-| **Status surface** | `/api/local-opencode/status`, `/refresh`, `/test` behind the host's own admission fence |
+| **Sidebar panel** | a **Local OpenCode** row in the sidebar: per-model show/hide, the channel switch, and the agent-channel settings, all on one page |
+| **Two channels** | *text only* (stateless, no tools, no side effects) or *agent* (opencode's own tool loop, which really reads and writes your files, gated by a permission policy you choose) |
+| **Status surface** | `/api/local-opencode/status`, `/refresh`, `/test`, `/visibility`, `/channel`, `/agent-settings`, `/agents` behind the host's own admission fence |
 
 ## Install
 
@@ -46,6 +68,8 @@ dsh plugin --profile web add dsh-local-opencode
 
 Restart `dsh`. The bundle layer in `cordis.patch.yml` mounts the plugin; nothing else to wire up.
 
+The package ships two halves behind one row: the host half (`index.js`, the model adapter and its HTTP routes) and the browser half (`client.js`, the sidebar panel and its page). `package.json` declares both — `exports["./client"]` points at the bundle, and `dsh.client.inject` lists the shell packages that declare the two seats it registers into (`sidebar.panellist` from ui-sidebar, `main` from ui-layout, `slots` from ui-renderer). If the sidebar row does not appear, the browser half did not load: check that every name in `dsh.client.inject` resolves in your profile.
+
 ## Configuration
 
 `~/.dsh/local-opencode/settings.json`, overridable by the bundle `config` (config wins):
@@ -56,11 +80,28 @@ Restart `dsh`. The bundle layer in `cordis.patch.yml` mounts the plugin; nothing
 | `includePaid.githubCopilot` | `false` | list GitHub Copilot models (billed by your Copilot plan) |
 | `includePaid.others` | `false` | list every other non-zero-cost channel |
 | `refreshMinutes` | `30` | background catalog refresh; `0` refreshes only at boot and on demand |
-| `requestTimeoutMs` | `180000` | per-call upstream timeout (clamped to 5s–30min) |
+| `requestTimeoutMs` | `180000` | per-call upstream timeout for the text channel (clamped to 5s–30min) |
+| `channel` | `text` | `text` (no tools) or `agent` (tools); switched from the sidebar |
+| `hiddenModels` | `[]` | model ids switched off in the sidebar; they leave every route group but stay in the catalog |
+| `permissionMode` | `allow-read` | `allow-read` / `allow-all` / `reject` — what the agent channel may do (see above) |
+| `workingDirectory` | empty | where the agent channel's tools run; empty means opencode's own location |
+| `agentName` | empty | which opencode agent to use; empty means the server default |
+| `agentTurnTimeoutMs` | `600000` | ceiling for one whole agent turn, including tool round-trips |
 
 Environment overrides: `OPENCODE_SERVER_URL` / `OPENCODE_SERVER_PASSWORD` bypass the registration file (a non-loopback URL is accepted here, since you are configuring your own machine).
 
+## The sidebar panel
+
+A **Local OpenCode** row appears in the sidebar (order 40, after the built-in panels). The page behind it holds the two switches this plugin exists for:
+
+- **Model visibility.** Every model in the catalog is listed with its provider, its free/paid badge and its context window. *Hide* removes it from the model picker; the entry stays on this page so you can bring it back. Every click round-trips to the host and re-renders from the server's answer — no optimistic update, because what changes is the picker's membership and a wrong guess is harder to trace than a slow one.
+- **Channel.** *Text only* or *agent*. Switching is immediate: the adapter reads the channel when it dispatches a turn, so the very next message uses the new lane. Nothing to restart.
+
+With the agent channel selected, the same page also shows the permission policy (each option states its consequence), the working directory, and which opencode agent to use. A red notice at the top of that section says plainly that the model will really read and write files, because it will.
+
 ## How one turn is served
+
+**Text channel** (the default):
 
 ```
 dsh GenerateOptions
@@ -72,32 +113,51 @@ dsh GenerateOptions
   -> block-start / text-delta / block-end / usage / finish
 ```
 
+**Agent channel:**
+
+```
+dsh GenerateOptions
+  -> GET  /api/event                       opened first, with repeated types= params
+  -> POST /api/session                     create, with permissions + agent + location
+  -> POST /api/session/{id}/prompt         enqueues; the answer arrives on the stream
+  -> consume events: text and reasoning deltas, step and usage tokens, permission.asked
+  -> POST /api/session/{id}/permission/{id}/reply   answer each ask per policy
+  -> fallback: GET /api/session/{id}/message        if the stream dies early
+  -> DELETE /api/session/{id}              in finally, always
+```
+
+The event stream is opened *before* `prompt` because `prompt` only acknowledges that the user message was enqueued; everything else arrives as events. opencode documents that stream as volatile (a slow consumer gets dropped), so when it ends before a terminal event the plugin reads the persisted assistant message instead of reporting a transport failure.
+
 The session exists only to carry the identity the free lane is metered against. `generate` does not accumulate history (verified: asking twice in one session, the second answer does not remember the first), which matches `dsh` replaying the full transcript on every turn, and deleting the session leaves nothing behind in your opencode session list.
 
 ## Limitations
 
-- **No function calling.** This lane takes text and returns text. Tool declarations are dropped and history is flattened, with a closing note telling the model not to announce tool calls. Use these models for chat, drafting, summarising and analysis, not as a coding agent inside `dsh`.
+- **No function calling *in the text channel*.** That lane takes text and returns text. Tool declarations are dropped and history is flattened, with a closing note telling the model not to announce tool calls. For filesystem work, switch to the agent channel.
+- **On the agent channel the tools are opencode's, not `dsh`'s.** `dsh` still declares its tools and they are still dropped; what runs instead is opencode's own tool set, inside the working directory you configured. The model cannot call a `dsh` tool, and `dsh` never sees the tool calls — only the final text and reasoning.
+- **An agent turn is slower and bounded by `agentTurnTimeoutMs`.** One turn may contain several tool round-trips; the default ceiling is ten minutes.
 - **No image input.** Blocks are projected to placeholder text, and `inputModalities` says `text` only, so the harness does the projection rather than the plugin pretending.
 - **Quota and region are the channel's, not ours.** The catalog is read live, so its size moves with opencode's own offerings; models that your network cannot reach report `RegionError` with the reason, and quota walls carry the provider's backoff. The picker shows whatever your machine can actually list, not a frozen table.
-- **Whole-turn streaming.** opencode answers the generation in one payload, so the response arrives as a single delta instead of a token stream.
+- **The text channel arrives whole.** Its `generate` call answers in one payload, so the response reaches `dsh` as a single delta instead of a token stream. The agent channel does stream, because it reads an event stream rather than a response body.
 
 ## Development
 
 ```powershell
 npm run check            # parse every module (no build step exists to catch a typo)
-npm test                 # syntax + bundle manifest + classifier + settings + contract
+npm test                 # syntax + bundle manifest + classifier + settings + contract + panel + client
 npm run test:live        # against the real local opencode, one round per free model
 npm run test:kernel      # against the published harness kernel (needs DSH_ROOT)
 ```
 
 | Suite | What it pins | Count |
 |---|---|---|
-| `scripts/check-syntax.mjs` | every shipped module parses | 16 files |
-| `scripts/bundle-manifest-check.mjs` | bundle wiring, tarball file list, repo metadata | 28 checks |
+| `scripts/check-syntax.mjs` | every shipped module parses | 21 files |
+| `scripts/bundle-manifest-check.mjs` | bundle wiring, both halves, tarball file list, repo metadata | 43 checks |
 | `test/classifier.mjs` | failure mapping, branch by branch, plus own-property failure shape | 16 asserts |
 | `test/settings.mjs` | defaults, override order, clamping, atomic flush, restart reload | 19 asserts |
 | `test/mock-runtime.mjs` | the adapter against a minimal cordis + fake opencode | 49 asserts |
 | `scripts/kernel-contract-check.mjs` | adapter methods, chunk types, failure codes vs the published kernel | 4 groups |
+| `test/panel.mjs` | the sidebar's routes and both channels against the fake server: visibility, channel switch, all three permission policies, stream-death fallback | 45 asserts |
+| `test/client.mjs` | the browser half: module wrapper, seat registrations, both channel pages rendering | 33 asserts |
 | `test/live.mjs` | the real local opencode, one round per zero-cost model | environment |
 
 
@@ -110,6 +170,7 @@ The contract suite runs the plugin against a minimal cordis context and a fake o
 | opencode | dsh | Node | result |
 |---|---|---|---|
 | 2.2.5 | 0.2.1-rc.2 | 24.21 | the whole zero-cost slice of the catalog answered in ~1.5s each; `crouton-alpha-free` and `beam-free` returned `RegionError` |
+| 2.3.0 | 0.2.2-rc.1 | 22.19 | the agent channel's event stream and all three permission policies, driven by hand: `ask` suspends until answered, `deny` leaves the file unwritten, `allow` runs silently |
 
 ## License
 
