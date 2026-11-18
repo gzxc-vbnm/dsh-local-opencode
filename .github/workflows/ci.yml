@@ -33,7 +33,7 @@ jobs:
         run: node scripts/bundle-manifest-check.mjs
       - name: failure classifier
         run: node test/classifier.mjs
-      - name: settings layer (defaults, order, migration)
+      - name: settings layer (defaults, order, clamping, flush)
         run: node test/settings.mjs
       - name: adapter contract suite (fake cordis + fake opencode)
         run: node test/mock-runtime.mjs
