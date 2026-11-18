@@ -47,7 +47,7 @@ https://opencode.ai/inference/openai/v1
 | **目录来源** | 直接读本机 `GET /api/model`：以后在 opencode 里登录新渠道，模型自动出现，不用改插件 |
 | **思考档位** | 映射到 opencode 的 model variant（`low` / `high` / `max` 等），只暴露目录里真声明了的档位 |
 | **上下文/输出上限** | 从目录读真实数值，`dsh` 的预算与压缩据此工作 |
-| **失败上报** | 区域拒绝、额度墙、限速各自归类，带 provider 给的退避时长，并且刻意不自动重试（不把一次额度墙付三次） |
+| **失败上报** | 区域拒绝、额度墙、限速各自归类，带 provider 给的退避时长，并且刻意不自动重试（不把一次额度墙付三次）。区域拒绝归 `INVALID_REQUEST` 而不是 `AUTH`：聊天 UI 会把 `AUTH` 改写成固定的「API 密钥无效」，真正的原因会被丢掉 |
 | **侧栏面板** | 左侧栏多出一行 **Local OpenCode**：逐模型的显示/不显示、通道切换、agent 通道的权限与目录设置，都在同一页 |
 | **两条通道** | *无工具文本*（无状态、无工具、无副作用）或 *agent*（opencode 自己的工具循环，真的读写你的文件，受你选的权限策略约束） |
 | **状态接口** | `/api/local-opencode/status`、`/refresh`、`/test`、`/visibility`、`/channel`、`/agent-settings`、`/agents`，外面套与内核同级的准入围栏 |
@@ -132,7 +132,7 @@ dsh GenerateOptions
 - **agent 通道的工具是 opencode 的，不是 `dsh` 的。** `dsh` 照旧声明它的工具，在这条道上同样被丢弃；真正跑的是 opencode 自己的工具集，在你配的工作目录里。模型调不到 `dsh` 的工具，`dsh` 也看不到那些工具调用——只看到最终文本与推理。
 - **agent 一轮更慢，且有 `agentTurnTimeoutMs` 封顶。** 一轮里可能包含多次工具往返，默认上限十分钟。
 - **不支持图片输入。** 图片块投影成占位文本，并且 `inputModalities` 如实声明只有 `text`，让内核去做投影，而不是插件假装能吃图。
-- **额度与区域是渠道的，不是插件的。** 目录是实时读的，所以模型数量随 opencode 自己的供给变动；插件不内置清单。你的网络够不着的模型会带着 `RegionError` 原因上报，额度墙则带上 provider 给的退避时长。
+- **额度与区域是渠道的，不是插件的。** 目录是实时读的，所以模型数量随 opencode 自己的供给变动；插件不内置清单。你的网络够不着的模型会带着 `RegionError` 原因上报（归 `INVALID_REQUEST`，这是 UI 会原样显示的那个码），额度墙则带上 provider 给的退避时长。
 - **文本通道整轮返回。** 它的 `generate` 一次给完这段生成，所以回答是一个 delta 到达，不是逐字流。agent 通道是流式的，因为它读的是事件流而不是响应体。
 
 ## 开发

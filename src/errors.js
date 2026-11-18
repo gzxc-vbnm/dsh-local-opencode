@@ -120,7 +120,10 @@ export function fromUpstream(status, bodyText) {
   const retryAfterMs = pickNumber(parsed && parsed.retryAfterMs, parsed && parsed.error && parsed.error.retry_after_ms)
   const prefix = 'local-opencode: opencode 返回 ' + status
   const facts = { status: status, providerRetryAfterMs: retryAfterMs }
-  if (/region|not.?available|country/i.test(message)) return new OpenCodeError(prefix + ': ' + message + '（区域限制，需要可用出口或换模型）', CODE.AUTH, facts)
+  // 区域拒绝用 INVALID_REQUEST 而不是 AUTH：内核 UI 对 AUTH 有硬编码（显示固定的「API 密钥无效」、
+  // 并丢弃我们写的 message），对 INVALID_REQUEST 没有特判，原因才能到用户眼前。它同样不在
+  // 可重试集合里，所以不会为一次区域封锁重复打上游。
+  if (/region|not.?available|country/i.test(message)) return new OpenCodeError(prefix + ': ' + message + '（区域限制，需要可用出口或换模型）', CODE.INVALID_REQUEST, facts)
   if (status === 401 || status === 403 || /auth|credential|permission|sign.?in/i.test(tag)) return new OpenCodeError(prefix + ': ' + message, CODE.AUTH, facts)
   if (isQuotaWording(tag + ' ' + message)) return new OpenCodeError(prefix + ': ' + message + '（免费额度已到顶，等渠道重置或换模型）', CODE.QUOTA, facts)
   if (status === 429 || /rate.?limit|too.?many/i.test(tag + ' ' + message)) return new OpenCodeError(prefix + ': ' + message, CODE.RATE_LIMIT, facts)

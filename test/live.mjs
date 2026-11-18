@@ -85,7 +85,7 @@ async function oneRound(model, variant) {
 }
 
 // A channel refusal is an environment fact: the code and the wording both say so.
-const CHANNEL_CODES = new Set(["AUTH", "QUOTA", "RATE_LIMIT"])
+const CHANNEL_CODES = new Set(["AUTH", "QUOTA", "RATE_LIMIT", "INVALID_REQUEST"])
 
 const targets = models.filter((model) => only === undefined || model.id === only)
 const sample = quick ? targets.slice(0, 3) : targets

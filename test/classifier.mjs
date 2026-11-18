@@ -18,8 +18,10 @@ function check(label, ok, detail) {
 const cls = (status, fields) => fromUpstream(status, JSON.stringify(fields))
 
 // 分支顺序：区域 > 凭据 > 终局配额 > 限速 > 4xx > 5xx > 未分类
-check('区域 403 -> AUTH 并提示换出口', cls(403, { message: 'This model is not available in your country' }).failure.code === 'AUTH')
+// 区域必须是 INVALID_REQUEST：内核 UI 对 AUTH 硬编码成「API 密钥无效」并丢掉我们写的原因。
+check('区域 403 -> INVALID_REQUEST 且原因可见', cls(403, { message: 'This model is not available in your country' }).failure.code === 'INVALID_REQUEST' && /区域/.test(cls(403, { message: 'This model is not available in your country' }).message))
 check('裸 401 -> AUTH', cls(401, { message: 'no' }).failure.code === 'AUTH')
+check('403 但没有区域措辞 -> 仍是 AUTH', cls(403, { message: 'invalid api key' }).failure.code === 'AUTH')
 check('provider reason=auth -> AUTH', cls(400, { _tag: 'ProviderRequestError', reason: 'auth', message: 'sign in required' }).failure.code === 'AUTH')
 check('Free usage limit -> QUOTA 而不是 RATE_LIMIT', cls(429, { _tag: 'ProviderRequestError', reason: 'rate_limit', message: 'Free usage limit reached', retryAfterMs: 60000 }).failure.code === 'QUOTA')
 check('quota exceeded 措辞 -> QUOTA', cls(400, { message: 'Quota exceeded for this account' }).failure.code === 'QUOTA')

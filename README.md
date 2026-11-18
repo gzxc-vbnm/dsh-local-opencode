@@ -49,7 +49,7 @@ The text channel is the default because it is the one with no blast radius: it t
 | **Catalog source** | `GET /api/model` on your own machine: channels you log into later show up without touching this plugin |
 | **Reasoning effort** | mapped onto opencode model variants (`low` / `high` / `max` …); only the variants the catalog declares are offered |
 | **Context and output caps** | read from the catalog, so `dsh` budgets and compaction see the real numbers |
-| **Failure reporting** | region blocks, quota walls and rate limits surface as their own codes with the provider's backoff, and are deliberately not retried |
+| **Failure reporting** | region blocks, quota walls and rate limits surface as their own codes with the provider's backoff, and are deliberately not retried. Region blocks are `INVALID_REQUEST`, not `AUTH`, because the chat UI rewrites `AUTH` into a fixed "API key is invalid" and drops the real reason |
 | **Sidebar panel** | a **Local OpenCode** row in the sidebar: per-model show/hide, the channel switch, and the agent-channel settings, all on one page |
 | **Two channels** | *text only* (stateless, no tools, no side effects) or *agent* (opencode's own tool loop, which really reads and writes your files, gated by a permission policy you choose) |
 | **Status surface** | `/api/local-opencode/status`, `/refresh`, `/test`, `/visibility`, `/channel`, `/agent-settings`, `/agents` behind the host's own admission fence |
@@ -136,7 +136,7 @@ The session exists only to carry the identity the free lane is metered against. 
 - **On the agent channel the tools are opencode's, not `dsh`'s.** `dsh` still declares its tools and they are still dropped; what runs instead is opencode's own tool set, inside the working directory you configured. The model cannot call a `dsh` tool, and `dsh` never sees the tool calls — only the final text and reasoning.
 - **An agent turn is slower and bounded by `agentTurnTimeoutMs`.** One turn may contain several tool round-trips; the default ceiling is ten minutes.
 - **No image input.** Blocks are projected to placeholder text, and `inputModalities` says `text` only, so the harness does the projection rather than the plugin pretending.
-- **Quota and region are the channel's, not ours.** The catalog is read live, so its size moves with opencode's own offerings; models that your network cannot reach report `RegionError` with the reason, and quota walls carry the provider's backoff. The picker shows whatever your machine can actually list, not a frozen table.
+- **Quota and region are the channel's, not ours.** The catalog is read live, so its size moves with opencode's own offerings; models that your network cannot reach report `RegionError` with the reason (`INVALID_REQUEST`, the one code the chat UI shows verbatim), and quota walls carry the provider's backoff. The picker shows whatever your machine can actually list, not a frozen table.
 - **The text channel arrives whole.** Its `generate` call answers in one payload, so the response reaches `dsh` as a single delta instead of a token stream. The agent channel does stream, because it reads an event stream rather than a response body.
 
 ## Development

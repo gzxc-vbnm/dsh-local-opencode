@@ -60,6 +60,16 @@ working unchanged; nothing in the settings you already have is renamed.
   `emitAdaptersUpdated` so the picker follows immediately.
 - `check-syntax.mjs` parses 21 modules (up from 16).
 
+### Fixed
+- **Region blocks are `INVALID_REQUEST`, not `AUTH`.** Found on a live run: opencode
+  answers `This model is not available in your country` with a 503, the plugin
+  classified that as a credential problem, and the chat UI turned `AUTH` into a fixed
+  "API key is invalid" — dropping the reason the adapter had written
+  (`dsh-client-ui-chat/lib/client.js` clears the message for `AUTH` at :9952 and
+  substitutes its own string at :6041). `INVALID_REQUEST` is rendered verbatim and is
+  still outside the retryable set, so a region block is neither mis-explained nor paid
+  twice. Same fix in the agent lane's classifier.
+
 ## [0.1.0] - 2026-11-07
 
 Initial release: the free models already configured in your local

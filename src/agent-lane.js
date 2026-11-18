@@ -287,7 +287,8 @@ export class AgentLane {
     const message = String(error.message || error.type || 'agent 道执行失败').replace(/\s+/g, ' ').slice(0, 400)
     const status = typeof error.status === 'number' ? error.status : undefined
     const retryAfterMs = typeof error.retryAfterMs === 'number' ? error.retryAfterMs : undefined
-    const code = /region|not.?available|country/i.test(message) ? CODE.AUTH
+    // 区域拒绝走 INVALID_REQUEST：UI 对 AUTH 会丢弃 message，只剩「API 密钥无效」。
+    const code = /region|not.?available|country/i.test(message) ? CODE.INVALID_REQUEST
       : /usage.?limit|quota/i.test(message) ? CODE.QUOTA
         : /rate.?limit|too.?many/i.test(message) ? CODE.RATE_LIMIT
           : /auth|credential|sign.?in/i.test(String(error.type || '')) ? CODE.AUTH

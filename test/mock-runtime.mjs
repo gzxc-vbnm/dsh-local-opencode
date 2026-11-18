@@ -151,7 +151,7 @@ check('RATE_LIMIT 与 QUOTA 都不进可重试集合（不把一次额度墙付�
 check('我们发出的每个 code 都在内核/官方适配器的词表里', await codesAreKernelKnown(adapter, handle))
 
 const region = await collect({ provider: 'local-opencode', model: 'opencode/fake-free', messages: [{ role: 'user', content: [{ type: 'text', text: 'BOOM-REGION' }] }] })
-check('区域拒绝 -> AUTH 且提示换出口', region[region.length - 1].reason.failure.code === 'AUTH' && /区域|出口/.test(region[region.length - 1].reason.failure.message), JSON.stringify(region[region.length - 1].reason.failure.message))
+check('区域拒绝 -> INVALID_REQUEST 且原因到得了 UI', region[region.length - 1].reason.failure.code === 'INVALID_REQUEST' && /区域|出口/.test(region[region.length - 1].reason.failure.message), JSON.stringify(region[region.length - 1].reason.failure))
 
 const empty = await collect({ provider: 'local-opencode', model: 'opencode/fake-free', messages: [{ role: 'user', content: [{ type: 'text', text: 'BOOM-EMPTY' }] }] })
 check('空答 -> EMPTY_RESPONSE（内核可退避重试）', empty[empty.length - 1].reason.failure.code === 'EMPTY_RESPONSE', JSON.stringify(empty[empty.length - 1].reason.failure))
