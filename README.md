@@ -5,7 +5,7 @@
 
 English | [简体中文](README_CN.md)
 
-[![CI](https://github.com/gzxc-vbnm/dsh-local-opencode/actions/workflows/ci.yml/badge.svg)](https://github.com/gzxc-vbnm/dsh-local-opencode/actions/workflows/ci.yml) [![dsh-plugin](https://img.shields.io/badge/topic-dsh--plugin-blue)](https://github.com/topics/dsh-plugin) ![license](https://img.shields.io/badge/license-MIT-green) ![node](https://img.shields.io/badge/node-%3E%3D22.19-brightgreen)
+[![CI](https://github.com/gzxc-vbnm/dsh-local-opencode/actions/workflows/ci.yml/badge.svg)](https://github.com/gzxc-vbnm/dsh-local-opencode/actions/workflows/ci.yml) [![npm](https://img.shields.io/npm/v/dsh-local-opencode)](https://www.npmjs.com/package/dsh-local-opencode) [![dsh-plugin](https://img.shields.io/badge/topic-dsh--plugin-blue)](https://github.com/topics/dsh-plugin) ![license](https://img.shields.io/badge/license-MIT-green) ![node](https://img.shields.io/badge/node-%3E%3D22.19-brightgreen)
 
 The free models you already have in [opencode](https://opencode.ai), selectable inside [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`). No login, no API key, no extra quota to buy: the plugin finds the opencode server already running on your machine, reads the models it can actually serve, and registers the zero-cost ones as a model provider, so `dsh`'s model picker shows a **Local OpenCode** group.
 
@@ -59,11 +59,11 @@ The text channel is the default because it is the one with no blast radius: it t
 Requirement: opencode installed and signed in on the same machine (`npm i -g @opencode/cli`, then run `opencode` once, or `opencode serve`). Its service registration in `~/.local/state/opencode/service.json` is what this plugin reads.
 
 ```powershell
-# from a checkout
-dsh plugin --profile web add link:C:/path/to/dsh-local-opencode
-
-# or once published to npm
+# from npm
 dsh plugin --profile web add dsh-local-opencode
+
+# or from a checkout
+dsh plugin --profile web add link:C:/path/to/dsh-local-opencode
 ```
 
 Restart `dsh`. The bundle layer in `cordis.patch.yml` mounts the plugin; nothing else to wire up.

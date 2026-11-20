@@ -5,6 +5,8 @@
 
 # Local OpenCode —— 给 DeepSeek Harness 用
 
+[![npm](https://img.shields.io/npm/v/dsh-local-opencode)](https://www.npmjs.com/package/dsh-local-opencode) [![CI](https://github.com/gzxc-vbnm/dsh-local-opencode/actions/workflows/ci.yml/badge.svg)](https://github.com/gzxc-vbnm/dsh-local-opencode/actions/workflows/ci.yml) ![license](https://img.shields.io/badge/license-MIT-green)
+
 把你在 [opencode](https://opencode.ai) 里已经拿到的免费模型，直接变成 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（下称 `dsh`）里可选的模型。不用登录、不用填 API Key、不用另外买额度：插件找到你本机已经在跑的 opencode 服务，读出它当下真能服务的模型，把零成本的那些注册成一个模型提供方，于是 `dsh` 的模型选择器里会出现 **Local OpenCode** 分组，左侧栏里也会多出一个同名入口。
 
 ## 为什么一定要经过本机 opencode
@@ -56,13 +58,13 @@ https://opencode.ai/inference/openai/v1
 
 前提：同机装有 opencode 且已登录（`npm i -g @opencode/cli`，跑一次 `opencode`，或 `opencode serve`）。插件读的是它自己写下的 `~/.local/state/opencode/service.json`。
 
-`powershell
-# 从本地 checkout 装
-dsh plugin --profile web add link:C:/path/to/dsh-local-opencode
-
-# 发布到 npm 之后
+```powershell
+# 从 npm 装
 dsh plugin --profile web add dsh-local-opencode
-`
+
+# 或从本地 checkout 装
+dsh plugin --profile web add link:C:/path/to/dsh-local-opencode
+```
 
 装完重启 `dsh`。`cordis.patch.yml` 这层 bundle patch 负责挂载，不需要再配任何东西。
 
@@ -137,12 +139,12 @@ dsh GenerateOptions
 
 ## 开发
 
-`powershell
+```powershell
 npm run check            # 逐文件解析（本插件没有构建步骤，没人替你抓语法错）
 npm test                 # bundle 清单 + 分类器 + 设置层 + 适配器契约 + 侧栏面板 + 浏览器半边
 npm run test:live        # 打真实本机 opencode，每个免费模型各跑一轮
 npm run test:kernel      # 打已发布的 dsh 内核（需要 DSH_ROOT）
-`
+```
 
 | 套件 | 钉住什么 | 规模 |
 |---|---|---|
