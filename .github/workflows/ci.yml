@@ -35,6 +35,8 @@ jobs:
         run: node test/classifier.mjs
       - name: settings layer (defaults, order, clamping, flush)
         run: node test/settings.mjs
+      - name: opencode runtime (detect, background start, one-click install)
+        run: node test/runtime.mjs
       - name: adapter contract suite (fake cordis + fake opencode)
         run: node test/mock-runtime.mjs
       - name: pack (publish dry run)

@@ -52,11 +52,15 @@ The text channel is the default because it is the one with no blast radius: it t
 | **Failure reporting** | region blocks, quota walls and rate limits surface as their own codes with the provider's backoff, and are deliberately not retried. Region blocks are `INVALID_REQUEST`, not `AUTH`, because the chat UI rewrites `AUTH` into a fixed "API key is invalid" and drops the real reason |
 | **Sidebar panel** | a **Local OpenCode** row in the sidebar: per-model show/hide, the channel switch, and the agent-channel settings, all on one page |
 | **Two channels** | *text only* (stateless, no tools, no side effects) or *agent* (opencode's own tool loop, which really reads and writes your files, gated by a permission policy you choose) |
-| **Status surface** | `/api/local-opencode/status`, `/refresh`, `/test`, `/visibility`, `/channel`, `/agent-settings`, `/agents` behind the host's own admission fence |
+| **Status surface** | `/api/local-opencode/status`, `/refresh`, `/test`, `/visibility`, `/channel`, `/agent-settings`, `/agents`, `/runtime`, `/service`, `/install` behind the host's own admission fence |
+| **Background service** | on load the plugin probes for the binary and runs `opencode service start` *before* the first catalog refresh, so the panel never opens against a service that is still booting; skipped when `OPENCODE_SERVER_URL` is set |
+| **One-click install** | no opencode on this machine? The panel offers the exact command and a button that runs it. On a machine that already has one, that block is not rendered at all |
 
 ## Install
 
-Requirement: opencode installed and signed in on the same machine (`npm i -g @opencode/cli`, then run `opencode` once, or `opencode serve`). Its service registration in `~/.local/state/opencode/service.json` is what this plugin reads.
+Requirement: opencode on the same machine, signed in. If it is not there yet, the panel's install button runs `npm install -g @opencode/cli@latest` for you — note the package name: the bare `opencode` does not exist on npm, and `opencode-ai` is the 1.x line, which speaks a different protocol and would connect to nothing.
+
+Once installed, `dsh` starting is enough: the plugin starts the background service itself and reads its registration in `~/.local/state/opencode/service.json`. You only need to run `opencode` once by hand to sign in.
 
 ```powershell
 # from npm
@@ -92,12 +96,16 @@ Environment overrides: `OPENCODE_SERVER_URL` / `OPENCODE_SERVER_PASSWORD` bypass
 
 ## The sidebar panel
 
-A **Local OpenCode** row appears in the sidebar (order 40, after the built-in panels). The page behind it holds the two switches this plugin exists for:
+A **Local OpenCode** row appears in the sidebar (order 40, after the built-in panels). The page behind it, top to bottom:
 
-- **Model visibility.** Every model in the catalog is listed with its provider, its free/paid badge and its context window. *Hide* removes it from the model picker; the entry stays on this page so you can bring it back. Every click round-trips to the host and re-renders from the server's answer — no optimistic update, because what changes is the picker's membership and a wrong guess is harder to trace than a slow one.
-- **Channel.** *Text only* or *agent*. Switching is immediate: the adapter reads the channel when it dispatches a turn, so the very next message uses the new lane. Nothing to restart.
+- **Header.** The title, the plugin's own version, and a dot for the connection to opencode: green when connected, grey before the first probe, red when the last attempt failed — with the failure's own sentence underneath rather than a generic one.
+- **Install card** (only when no opencode was found). The command it would run, a button that runs it, and the tail of the installer's own output while it works. On a machine that already has opencode this block does not exist — not disabled, not greyed out, simply not rendered.
+- **Four-cell strip.** How many models are in the picker, how many of them are free, which channel is live, and what the background service is doing.
+- **Channel.** *Text only* or *agent*, as a segmented switch. Switching is immediate: the adapter reads the channel when it dispatches a turn, so the very next message uses the new lane. Nothing to restart.
+- **Model list.** One card per model with its provider, its free/paid badge, its context window and its id; *Hide* removes it from the picker and the entry stays so you can bring it back. Every click round-trips to the host and re-renders from the server's answer — no optimistic update, because what changes is the picker's membership and a wrong guess is harder to trace than a slow one.
+- **Agent-channel section** (only under *agent*). A red notice that the model will really read and write files, the permission policy as three cards that each state their consequence, the working directory, and which opencode agent to use.
 
-With the agent channel selected, the same page also shows the permission policy (each option states its consequence), the working directory, and which opencode agent to use. A red notice at the top of that section says plainly that the model will really read and write files, because it will.
+Every colour comes from the host theme's own tokens (`--dsw-alias-*`) with a literal fallback, so the panel follows the host's light/dark theme instead of hard-coding colours. 0.3.0 also removed two tokens 0.2.0 used that do not exist in the shipped theme, which is why the old panel's error and success colours were the fallback hex.
 
 ## How one turn is served
 
@@ -143,20 +151,21 @@ The session exists only to carry the identity the free lane is metered against. 
 
 ```powershell
 npm run check            # parse every module (no build step exists to catch a typo)
-npm test                 # syntax + bundle manifest + classifier + settings + contract + panel + client
+npm test                 # syntax + bundle manifest + classifier + settings + runtime + contract + panel + client
 npm run test:live        # against the real local opencode, one round per free model
 npm run test:kernel      # against the published harness kernel (needs DSH_ROOT)
 ```
 
 | Suite | What it pins | Count |
 |---|---|---|
-| `scripts/check-syntax.mjs` | every shipped module parses | 21 files |
-| `scripts/bundle-manifest-check.mjs` | bundle wiring, both halves, tarball file list, repo metadata | 43 checks |
-| `test/classifier.mjs` | failure mapping, branch by branch, plus own-property failure shape | 16 asserts |
+| `scripts/check-syntax.mjs` | every shipped module parses | 23 files |
+| `scripts/bundle-manifest-check.mjs` | bundle wiring, both halves, tarball file list, repo metadata | 44 checks |
+| `test/classifier.mjs` | failure mapping, branch by branch, plus own-property failure shape | 17 asserts |
 | `test/settings.mjs` | defaults, override order, clamping, atomic flush, restart reload | 19 asserts |
-| `test/mock-runtime.mjs` | the adapter against a minimal cordis + fake opencode | 49 asserts |
+| `test/runtime.mjs` | binary detection, `cmd.exe` quoting for `.cmd` shims, idempotent and concurrent service start, timeout kill, install success/refusal/failure | 34 asserts |
+| `test/mock-runtime.mjs` | the adapter against a minimal cordis + fake opencode | 48 asserts |
 | `scripts/kernel-contract-check.mjs` | adapter methods, chunk types, failure codes vs the published kernel | 4 groups |
-| `test/panel.mjs` | the sidebar's routes and both channels against the fake server: visibility, channel switch, all three permission policies, stream-death fallback | 45 asserts |
+| `test/panel.mjs` | the sidebar's routes and both channels against the fake server: visibility, channel switch, all three permission policies, stream-death fallback, runtime view | 52 asserts |
 | `test/client.mjs` | the browser half: module wrapper, seat registrations, both channel pages rendering | 33 asserts |
 | `test/live.mjs` | the real local opencode, one round per zero-cost model | environment |
 
@@ -171,6 +180,7 @@ The contract suite runs the plugin against a minimal cordis context and a fake o
 |---|---|---|---|
 | 2.2.5 | 0.2.1-rc.2 | 24.21 | the whole zero-cost slice of the catalog answered in ~1.5s each; `crouton-alpha-free` and `beam-free` returned `RegionError` |
 | 2.3.0 | 0.2.2-rc.1 | 22.19 | the agent channel's event stream and all three permission policies, driven by hand: `ask` suspends until answered, `deny` leaves the file unwritten, `allow` runs silently |
+| 2.3.0 | 0.2.2 | 24.21 | background service start measured at 9.2 s cold and 561 ms warm (exit 0 both times, so a second `dsh` does not fork a second server); detection found the npm-global binary, `opencode --version` → `opencode v2.3.0` |
 
 ## License
 

@@ -4,6 +4,63 @@ All notable changes to `dsh-local-opencode` are recorded here. The format follow
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/) (0.x: minor bumps may change the settings shape).
 
+## [0.3.0] - 2026-11-21
+
+The plugin stops assuming opencode is already running. It brings the service up in
+the background when `dsh` loads, and on a machine with no opencode at all it offers a
+one-click install instead of a red "disconnected" badge. The sidebar panel was rebuilt
+around what the page is actually for. Routes, settings and both channels are unchanged;
+a 0.2.0 settings file keeps working as-is.
+
+### Added
+- **Background service start.** When the plugin loads it probes for the opencode binary
+  and runs `opencode service start` before the first catalog refresh — otherwise the
+  first refresh races the service and the panel opens red. The command is idempotent on
+  this build (measured on 2.3.0: 9.2 s cold, 561 ms when the service is already up, exit
+  0 both times), so a second `dsh` instance does not start a second server. It is skipped
+  entirely when `OPENCODE_SERVER_URL` is set, because then you are managing the server
+  yourself.
+- **One-click install.** `src/runtime.js` detects opencode in the npm global roots and on
+  `PATH` (`.exe`, `.cmd`, `.bat` shims and the `@opencode/cli` binary layout); when
+  nothing is found the panel shows an install card with the exact command and a button
+  that runs it (`npm install -g @opencode/cli@latest --no-fund --no-audit`, 10 min
+  ceiling, output tailed into the card). Once a binary is found the whole block is not
+  rendered — the same page on a machine that already has opencode shows nothing there.
+  `POST /install` refuses when opencode is already present (`reason: "installed"`): it
+  fills a gap, it does not silently upgrade your version.
+- **The install target is `@opencode/cli`, and that is not cosmetic.** The bare name
+  `opencode` does not exist on npm (E404) and `opencode-ai` is the 1.x line (latest
+  1.19.6), which speaks a different HTTP surface: installed, it would leave the panel
+  connected to nothing. Both facts are stated in the panel copy next to the button.
+- **Routes** `GET /runtime` and `POST /service`; `statusView` now carries `runtime`
+  (installed, binary, source, searched paths, service state, install state, and the
+  command it would run).
+
+### Changed
+- **The sidebar panel was rebuilt.** Header with the version badge and a connection dot;
+  a four-cell strip (in picker / free / channel / service); the channel switch as a
+  segmented control; one card per model with its provider, free-or-paid badge, context
+  window and show/hide button; the agent channel's permission policy as three cards that
+  each state their consequence; a footer with the version and, when found, the binary
+  path. The one thing kept from 0.2.0 is the refusal to update optimistically — every
+  click round-trips and re-renders from the host's answer.
+- **Two theme tokens that never existed are gone.** 0.2.0 referenced
+  `--dsw-alias-label-danger` and `--dsw-alias-label-success`; the shipped theme defines
+  `--dsw-alias-label-error` and `--dsw-alias-state-success-primary`. Both were dead
+  fallbacks, so the old panel's error and success colours silently were the hex literals.
+  Every colour in the panel now comes from a token that exists in the theme, with a
+  literal fallback.
+
+### Tests
+- `test/runtime.mjs` (34 assertions) pins detection (npm-global, PATH, `OPENCODE_BIN`
+  pinning with no PATH fallback, nothing installed, search cap), the `.cmd` `cmd.exe /d
+  /s /c` quoting, endpoint parsing, idempotent and concurrent `startService`, timeout
+  kill, and install success/refusal/failure.
+- `test/panel.mjs` grew to 52 assertions: the runtime view, `GET /runtime`, and
+  `POST /install` refusing on a machine that already has opencode.
+- `check-syntax.mjs` parses 23 modules (up from 21); `bundle-manifest-check.mjs` is 44
+  checks and requires `src/runtime.js` in the shipped module list.
+
 ## [0.2.0] - 2026-11-18
 
 The plugin grows a second channel — opencode's own agent loop, with tools — and a

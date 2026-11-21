@@ -44,7 +44,7 @@ for (const entry of pkg.files) {
 }
 
 // The modules the harness imports at boot.
-for (const entry of ["index.js", "client.js", "src/adapter.js", "src/client.js", "src/state.js", "src/settings.js", "src/discovery.js", "src/errors.js", "src/agent-lane.js", "src/event-stream.js"]) {
+for (const entry of ["index.js", "client.js", "src/adapter.js", "src/client.js", "src/state.js", "src/settings.js", "src/discovery.js", "src/errors.js", "src/agent-lane.js", "src/event-stream.js", "src/runtime.js"]) {
   check("shipped module: " + entry, exists(entry) === true)
 }
 

@@ -19,6 +19,9 @@ const mock = await startMockServer()
 process.env.OPENCODE_SERVER_URL = mock.url
 process.env.OPENCODE_SERVER_PASSWORD = 'mockpw'
 process.env.DSH_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'lo-panel-'))
+// 钉死探测结果：面板的运行环境卡必须与这台机器上装没装 opencode 无关地可测。
+const missingBinary = path.join(process.env.DSH_HOME, 'missing-opencode.exe')
+process.env.OPENCODE_BIN = missingBinary
 
 const registered = []
 let emitCount = 0
@@ -233,7 +236,28 @@ const promptsBefore = mock.state.promptCount
 await drain({ provider: 'local-opencode', model: FREE, messages: [{ role: 'user', content: [{ type: 'text', text: '再试' }] }] })
 check('切回文本道后不再走 agent 循环', mock.state.promptCount === promptsBefore && mock.state.generateCount >= 2, 'prompt=' + mock.state.promptCount + ' gen=' + mock.state.generateCount)
 
-// 15) 面板路由也在围栏后面
+// 15) 运行环境：探测结果、服务状态、安装入口都在状态里（面板直接渲染它）
+const runtimeView = handle.statusView().runtime
+check('statusView 带出运行环境', runtimeView !== undefined && runtimeView.installed === false, JSON.stringify(runtimeView && runtimeView.installed))
+check('装没装的结论来自探测', runtimeView.source === 'OPENCODE_BIN', String(runtimeView.source))
+check('安装命令是 2.x 那条线', runtimeView.installCommand === 'npm install -g @opencode/cli@latest', String(runtimeView.installCommand))
+const runtimeRoute = await request('GET', '/api/local-opencode/runtime')
+check('运行环境路由可用', runtimeRoute.status === 200 && runtimeRoute.json.runtime.installed === false, String(runtimeRoute.status))
+check('服务状态是枚举里的一档', ['unknown', 'starting', 'running', 'failed', 'unavailable'].includes(runtimeRoute.json.runtime.service.state) === true, String(runtimeRoute.json.runtime.service.state))
+check('没装时服务没被启动', runtimeRoute.json.runtime.service.attempts === 0, String(runtimeRoute.json.runtime.service.attempts))
+
+// 已经装了就不许再跑安装命令：补缺不是升级（这一态用真的 opencode 验，没装就跳过）
+process.env.OPENCODE_BIN = ''
+const realRuntime = handle.runtime.detect(true)
+if (realRuntime.installed === true) {
+  const refuse = await request('POST', '/api/local-opencode/install', {})
+  check('已装时安装被拒且不改状态', refuse.status === 202 && refuse.json.started === false && refuse.json.reason === 'installed', JSON.stringify(refuse.json && refuse.json.reason))
+} else {
+  check('已装时安装被拒且不改状态', true, 'skipped: no opencode on this machine')
+}
+process.env.OPENCODE_BIN = missingBinary
+
+// 16) 面板路由也在围栏后面
 const mounts = apiMounts.length === 1 && apiMounts[0].path === '/api/local-opencode'
 check('面板 API 仍挂在同一个前缀下', mounts, JSON.stringify(apiMounts.map((m) => m.path)))
 const cross = await request('POST', '/api/local-opencode/visibility', { id: FREE, hidden: true }, { origin: 'http://evil.example' })

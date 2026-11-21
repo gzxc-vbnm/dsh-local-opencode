@@ -52,11 +52,15 @@ https://opencode.ai/inference/openai/v1
 | **失败上报** | 区域拒绝、额度墙、限速各自归类，带 provider 给的退避时长，并且刻意不自动重试（不把一次额度墙付三次）。区域拒绝归 `INVALID_REQUEST` 而不是 `AUTH`：聊天 UI 会把 `AUTH` 改写成固定的「API 密钥无效」，真正的原因会被丢掉 |
 | **侧栏面板** | 左侧栏多出一行 **Local OpenCode**：逐模型的显示/不显示、通道切换、agent 通道的权限与目录设置，都在同一页 |
 | **两条通道** | *无工具文本*（无状态、无工具、无副作用）或 *agent*（opencode 自己的工具循环，真的读写你的文件，受你选的权限策略约束） |
-| **状态接口** | `/api/local-opencode/status`、`/refresh`、`/test`、`/visibility`、`/channel`、`/agent-settings`、`/agents`，外面套与内核同级的准入围栏 |
+| **状态接口** | `/api/local-opencode/status`、`/refresh`、`/test`、`/visibility`、`/channel`、`/agent-settings`、`/agents`、`/runtime`、`/service`、`/install`，外面套与内核同级的准入围栏 |
+| **后台服务** | 插件载入时先探测二进制，再跑 `opencode service start`，**之后**才拉第一次目录——否则首刷会撞上还在启动的服务，面板一开门就是红的。设了 `OPENCODE_SERVER_URL`（你自己接管）时整段跳过 |
+| **一键安装** | 这台机器上没有 opencode 时，面板给出确切命令和一个执行它的按钮；已经有 opencode 的机器上，这一块根本不渲染 |
 
 ## 安装
 
-前提：同机装有 opencode 且已登录（`npm i -g @opencode/cli`，跑一次 `opencode`，或 `opencode serve`）。插件读的是它自己写下的 `~/.local/state/opencode/service.json`。
+前提：同机装有 opencode 且已登录。还没有的话，面板上的安装按钮会替你跑 `npm install -g @opencode/cli@latest`——注意包名：裸名 `opencode` 在 npm 上不存在，`opencode-ai` 则是 1.x 那条线，协议不一样，装上也是连不到东西的。
+
+装好之后启动 `dsh` 就够了：后台服务由插件自己拉起，它读的是 opencode 写下的 `~/.local/state/opencode/service.json`。你唯一需要手跑一次 `opencode` 的场合是登录。
 
 ```powershell
 # 从 npm 装
@@ -92,12 +96,16 @@ dsh plugin --profile web add link:C:/path/to/dsh-local-opencode
 
 ## 侧栏面板
 
-左侧栏里多出一行 **Local OpenCode**（order 40，排在内置面板之后）。点开的那一页就是本插件存在的两个开关：
+左侧栏里多出一行 **Local OpenCode**（order 40，排在内置面板之后）。点开的那一页从上到下：
 
-- **模型显示。** 目录里每个模型都列出来，带 provider、免费/计费徽标和上下文窗口。点「不显示」就把它从模型选择器里摘掉，条目仍留在这一页，随时能拨回来。每次点击都真的往返宿主再按服务端的回答重绘——**不做乐观更新**，因为改的是选择器的成员表，猜错比慢半拍更难查。
-- **通道。** 无工具文本 / 带工具 agent。切换立即生效：适配器在派发一轮的时候读通道，所以下一条消息就走新道，不用重启。
+- **页眉。** 标题、插件自己的版本号，以及一个连到 opencode 的连接圆点：连上是绿的，还没探测过是灰的，最近一次失败是红的——失败时下面跟的是它自己那句原因，不是一句套话。
+- **安装卡**（只有没找到 opencode 时才存在）。写着将要执行的命令、执行它的按钮，以及安装过程中被实时贴出来的输出末尾几行。已经有 opencode 的机器上这一块**不存在**——不是禁用，不是置灰，是不渲染。
+- **四格统计条。** 有几个模型进了选择器、其中几个免费、当前通道、后台服务在干什么。
+- **通道。** 无工具文本 / 带工具 agent，盒子里的分段开关。切换立即生效：适配器在派发一轮的时候读通道，所以下一条消息就走新道，不用重启。
+- **模型列表。** 一个模型一张卡：provider、免费/计费徽标、上下文窗口、id，右侧是显示/不显示。点「不显示」就把它从模型选择器里摘掉，条目仍留在这一页，随时能拨回来。每次点击都真的往返宿主再按服务端的回答重绘——**不做乐观更新**，因为改的是选择器的成员表，猜错比慢半拍更难查。
+- **agent 通道区**（只有切到 agent 才出现）。一条红色提示直说模型会真的读写文件，权限策略做成三张各写后果的卡片，然后是工作目录和用哪个 opencode agent。
 
-选到 agent 通道后，同一页还会出现权限策略（每个选项都写着后果）、工作目录、以及用哪个 opencode agent。该区顶部有一条红色提示，直说模型会真的读写文件——因为它真的会。
+所有颜色都取自宿主主题自己的 token（`--dsw-alias-*`），并带字面量回退，所以面板跟着宿主的明暗主题走，而不是把颜色写死。0.3.0 还清掉了 0.2.0 用的两个主题里根本不存在 token——老面板的错误色与成功色其实是回退值，就是这个原因。
 
 ## 一轮请求怎么走完
 
@@ -141,19 +149,20 @@ dsh GenerateOptions
 
 ```powershell
 npm run check            # 逐文件解析（本插件没有构建步骤，没人替你抓语法错）
-npm test                 # bundle 清单 + 分类器 + 设置层 + 适配器契约 + 侧栏面板 + 浏览器半边
+npm test                 # 语法 + bundle 清单 + 分类器 + 设置层 + 运行环境 + 适配器契约 + 侧栏面板 + 浏览器半边
 npm run test:live        # 打真实本机 opencode，每个免费模型各跑一轮
 npm run test:kernel      # 打已发布的 dsh 内核（需要 DSH_ROOT）
 ```
 
 | 套件 | 钉住什么 | 规模 |
 |---|---|---|
-| `check-syntax.mjs` | 每个模块都能解析 | 21 个文件 |
-| `bundle-manifest-check.mjs` | bundle 挂载接线、两个半边、发布文件清单、仓库元数据 | 43 项 |
-| `test/classifier.mjs` | 失败映射逐分支钉死，含 failure 必须是自有属性 | 16 项 |
+| `check-syntax.mjs` | 每个模块都能解析 | 23 个文件 |
+| `bundle-manifest-check.mjs` | bundle 挂载接线、两个半边、发布文件清单、仓库元数据 | 44 项 |
+| `test/classifier.mjs` | 失败映射逐分支钉死，含 failure 必须是自有属性 | 17 项 |
 | `test/settings.mjs` | 默认值、覆盖顺序、夹取、原子落盘、重启读回 | 19 项 |
-| `test/mock-runtime.mjs` | 适配器对上最小 cordis + 假 opencode 的完整契约 | 49 项 |
-| `test/panel.mjs` | 侧栏路由与两条通道打假服务器：显隐、切通道、三种权限策略、断流兜底 | 45 项 |
+| `test/runtime.mjs` | 二进制探测、`.cmd` 垫片的 cmd.exe 引号、服务启动的幂等与并发共享、超时杀进程、安装成功/被拒/失败 | 34 项 |
+| `test/mock-runtime.mjs` | 适配器对上最小 cordis + 假 opencode 的完整契约 | 48 项 |
+| `test/panel.mjs` | 侧栏路由与两条通道打假服务器：显隐、切通道、三种权限策略、断流兜底、运行环境视图 | 52 项 |
 | `test/client.mjs` | 浏览器半边：模块包裹、座位注册、两条通道的页面渲染 | 33 项 |
 | `kernel-contract-check.mjs` | 对已发布内核核对方法集、chunk 类型、失败码 | 4 组 |
 | `test/live.mjs` | 打真实本机 opencode，每个零成本模型各跑一轮 | 随环境 |
@@ -168,6 +177,7 @@ npm run test:kernel      # 打已发布的 dsh 内核（需要 DSH_ROOT）
 |---|---|---|---|
 | 2.2.5 | 0.2.1-rc.2 | 24.21 | 本机目录列出的零成本模型逐个约 1.5 秒出字；`crouton-alpha-free`、`beam-free` 回 `RegionError` |
 | 2.3.0 | 0.2.2-rc.1 | 22.19 | agent 通道的事件流与三种权限策略手工打穿：`ask` 会挂起到应答，`deny` 下文件确实没被写，`allow` 下静默执行 |
+| 2.3.0 | 0.2.2 | 24.21 | 后台服务启动实测：冷启 9.2 秒、已运行时 561 毫秒（两次 exit 都是 0，所以第二个 `dsh` 不会另起一个服务）；探测命中 npm 全局那份二进制，`opencode --version` → `opencode v2.3.0` |
 
 ## 许可
 

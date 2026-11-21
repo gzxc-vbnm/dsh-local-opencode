@@ -1,6 +1,6 @@
 {
   "name": "dsh-local-opencode",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Local OpenCode plugin for DeepSeek Harness (dsh): discovers the opencode server already running on this machine and registers its zero-cost free models (Big Pickle, DeepSeek V4.1 Flash Free, GLM-5.3-Flash Free and friends) as a model provider, so the dsh model picker can select them directly. No login, no API key.",
   "type": "module",
   "license": "MIT",
@@ -54,13 +54,14 @@
     "test:classifier": "node test/classifier.mjs",
     "test:settings": "node test/settings.mjs",
     "test:contract": "node test/mock-runtime.mjs",
-    "test": "npm run check && npm run test:bundle && npm run test:classifier && npm run test:settings && npm run test:contract && npm run test:panel && npm run test:client",
+    "test": "npm run check && npm run test:bundle && npm run test:classifier && npm run test:settings && npm run test:runtime && npm run test:contract && npm run test:panel && npm run test:client",
     "test:live": "node test/live.mjs",
     "test:live:quick": "node test/live.mjs --quick",
     "test:kernel": "node scripts/kernel-contract-check.mjs",
     "pack:check": "npm pack --dry-run",
     "prepublishOnly": "npm run check && npm test && npm run pack:check",
     "postpublish": "node scripts/sync-mirror.mjs",
+    "test:runtime": "node test/runtime.mjs",
     "test:panel": "node test/panel.mjs",
     "test:client": "node test/client.mjs"
   },

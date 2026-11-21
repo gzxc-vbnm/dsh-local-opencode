@@ -24,6 +24,7 @@ import { CHANNELS, DATA_DIR_NAME, DEFAULTS, PERMISSION_MODES, createSettings, re
 import { discoverOpenCode } from './src/discovery.js'
 import { OpenCodeClient } from './src/client.js'
 import { OpenCodeAdapter } from './src/adapter.js'
+import { createRuntime } from './src/runtime.js'
 import { ROUTE, ROUTE_LABEL, ROUTE_PAID, ROUTE_PAID_LABEL, createState, membershipFor, toCatalogEntry, visibilityRows } from './src/state.js'
 
 export const name = 'local-opencode'
@@ -55,6 +56,14 @@ export function apply(ctx, config) {
   const settings = createSettings({ dataDir: path.join(resolveDshHome(), DATA_DIR_NAME), logger: logger, config: config })
   const state = createState()
   const settingsNs = (ctx.fiber && ctx.fiber.entry && ctx.fiber.entry.options && ctx.fiber.entry.options.id) || name
+
+  /**
+   * opencode 自己的进程管理：探测、后台拉起、一键安装。
+   *
+   * 插件自己拥有它而不是要求用户先开 opencode —— 「装了 opencode 却还是要手动起服务」
+   * 是这个插件之前唯一必须由人记住的一步。
+   */
+  const runtime = createRuntime({ logger: logger })
 
   /** 缓存的 client；endpoint 变化或失败后置空重来。 */
   let client = undefined
@@ -185,8 +194,15 @@ export function apply(ctx, config) {
   let timer = undefined
   ctx.effect(function () {
     if (!settings.get().enabled) return undefined
-    // 不在 apply 里 await：opencode 没在跑时插件仍要起来，状态面板会说明原因。
-    refreshCatalog({ force: true }).catch(function () {})
+    // 先静默把 opencode 的后台服务拉起来，再拉目录：反过来的话首刷必然在
+    // 服务还没就绪时失败，面板开头就先红一次。两者都不 await —— 没装 opencode
+    // 的机器上插件照样要起来，说清楚"没装"是面板的活。
+    // OPENCODE_SERVER_URL 是"我自己有服务"的显式接管：那时插件不得再拉起一个。
+    const own = process.env.OPENCODE_SERVER_URL === undefined || process.env.OPENCODE_SERVER_URL === ''
+    const warm = own && runtime.detect(false).installed === true
+      ? runtime.startService().catch(function () { return undefined })
+      : Promise.resolve(undefined)
+    warm.then(function () { return refreshCatalog({ force: true }).catch(function () {}) })
     const minutes = settings.get().refreshMinutes
     if (minutes > 0) {
       timer = setInterval(function () { refreshCatalog({}).catch(function () {}) }, minutes * 60000)
@@ -231,6 +247,8 @@ export function apply(ctx, config) {
       agents: state.agents || [],
       routes: routes,
       registered: registration !== undefined,
+      // 面板的运行环境卡：装了没、服务在不在、安装进行到哪一步。
+      runtime: runtime.view(),
       lastError: lastError,
     }
   }
@@ -363,6 +381,33 @@ export function apply(ctx, config) {
       return
     }
 
+    if (req.method === 'GET' && pathname === '/api/local-opencode/runtime') {
+      json(res, 200, { runtime: runtime.view() })
+      return
+    }
+    if (req.method === 'POST' && pathname === '/api/local-opencode/service') {
+      // 手动重启：自动拉起失败时（比如用户后来才装好、或手动 kill 了）需要一条补救路径。
+      const result = await runtime.runService('start')
+      if (result.ok === true) { client = undefined; refreshCatalog({ force: true }).catch(function () {}) }
+      json(res, result.ok === true ? 200 : 502, Object.assign({ runtime: runtime.view() }, result.ok === true ? {} : { error: result.message }))
+      return
+    }
+    if (req.method === 'POST' && pathname === '/api/local-opencode/install') {
+      const started = runtime.startInstall()
+      if (started.started === true) {
+        // 这条命令要几十秒：响应立刻回，装完的那一刻自己再探一次并拉目录，
+        // 面板那侧按 install.state 轮询，不需要宿主推送。
+        runtime.installPromise().then(function (result) {
+          if (result && result.ok === true) {
+            client = undefined
+            runtime.startService().then(function () { return refreshCatalog({ force: true }) }).catch(function () {})
+          }
+        }).catch(function () {})
+      }
+      json(res, 202, Object.assign({ runtime: runtime.view() }, started))
+      return
+    }
+
     json(res, 404, { error: 'not found: ' + req.method + ' ' + pathname })
   }
 
@@ -393,6 +438,7 @@ export function apply(ctx, config) {
     settings: settings,
     adapter: adapter,
     recomputeMembership: recomputeMembership,
+    runtime: runtime,
     // 面板处理器暴露出来，好让契约测试直接打这些路由（生产路径由 webServer 调用）。
     api: api,
   }
