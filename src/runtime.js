@@ -140,9 +140,9 @@ export function buildCommand(binary, args, kind) {
   const lower = String(binary).toLowerCase()
   const shim = kind === 'shim' || lower.endsWith('.cmd') || lower.endsWith('.bat')
   if (shim === false) return { file: binary, args: list, windowsVerbatimArguments: false }
-  const shell = process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : '/bin/sh'
   const line = '"' + binary + '"' + (list.length === 0 ? '' : ' ' + list.map(quoteForShell).join(' '))
-  return { file: shell, args: ['/d', '/s', '/c', '"' + line + '"'], windowsVerbatimArguments: true }
+  if (process.platform !== 'win32') return { file: '/bin/sh', args: ['-c', line], windowsVerbatimArguments: false }
+  return { file: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', '"' + line + '"'], windowsVerbatimArguments: true }
 }
 
 function runChild(spawnImpl, plan, options) {

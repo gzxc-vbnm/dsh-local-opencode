@@ -51,7 +51,11 @@ function fakeSpawn(behaviour) {
 }
 
 // ---- 探测 ------------------------------------------------------------------
-const cliBinary = globalRoots({}).map((root) => path.join(root, '@opencode', 'cli', 'bin', 'opencode.exe'))
+// 两个平台的名字都给出来：探测自己按 platform 只问其中一个，测试不必再分叉。
+const cliBinary = globalRoots({}).flatMap((root) => [
+  path.join(root, '@opencode', 'cli', 'bin', 'opencode.exe'),
+  path.join(root, '@opencode', 'cli', 'bin', 'opencode'),
+])
 const firstRoot = globalRoots({})[0]
 check('全局根目录至少有一个候选', typeof firstRoot === 'string' && firstRoot.length > 0, String(firstRoot))
 
@@ -76,9 +80,12 @@ const exePlan = buildCommand('C:\\npm\\opencode.exe', ['service', 'start'], 'exe
 check('真身直接 spawn', exePlan.file === 'C:\\npm\\opencode.exe' && exePlan.windowsVerbatimArguments === false, JSON.stringify(exePlan.args))
 
 const shimPlan = buildCommand('C:\\npm\\opencode.cmd', ['service', 'start'], 'shim')
-check('.cmd 垫片过 shell', /cmd\.exe$|ComSpec/.test(shimPlan.file) === true || shimPlan.file === (process.env.ComSpec || 'cmd.exe'), shimPlan.file)
-check('.cmd 垫片带 /d /s /c', shimPlan.args.includes('/c') === true, JSON.stringify(shimPlan.args))
-check('整条命令行被再包一层引号（/s 会剥一层）', /^".*"$/.test(String(shimPlan.args[3])) === true, String(shimPlan.args[3]))
+const winShell = process.platform === 'win32'
+check('.cmd 垫片过 shell', winShell ? /cmd\.exe$/i.test(shimPlan.file) === true : shimPlan.file === '/bin/sh', shimPlan.file)
+check('垫片走平台的 -c 家族', winShell ? shimPlan.args.includes('/c') === true : shimPlan.args[0] === '-c', JSON.stringify(shimPlan.args.slice(0, 3)))
+const shimLine = String(winShell ? shimPlan.args[3] : shimPlan.args[1])
+check('整条命令行被再包一层引号（shell 会剥一层）', /^"[^]*"$/.test(shimLine) === true, shimLine)
+check('垫片参数在命令行里可读', shimLine.includes('service start') === true, shimLine)
 
 const spaced = buildCommand('C:\\npm\\my opencode.exe', [], 'exe')
 check('真身路径有空格也不额外加引号（spawn 自己处理）', spaced.args.length === 0 && spaced.file === 'C:\\npm\\my opencode.exe')
