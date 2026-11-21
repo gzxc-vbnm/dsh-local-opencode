@@ -84,7 +84,9 @@ const winShell = process.platform === 'win32'
 check('.cmd 垫片过 shell', winShell ? /cmd\.exe$/i.test(shimPlan.file) === true : shimPlan.file === '/bin/sh', shimPlan.file)
 check('垫片走平台的 -c 家族', winShell ? shimPlan.args.includes('/c') === true : shimPlan.args[0] === '-c', JSON.stringify(shimPlan.args.slice(0, 3)))
 const shimLine = String(winShell ? shimPlan.args[3] : shimPlan.args[1])
-check('整条命令行被再包一层引号（shell 会剥一层）', /^"[^]*"$/.test(shimLine) === true, shimLine)
+check('程序路径一定被引号包住（路径里有空格也不裂）', shimLine.indexOf('"C:\\npm\\opencode.cmd"') >= 0, shimLine)
+// cmd.exe 的 /s 会剥掉最外层那一对引号，所以 Windows 上整条还要再包一层；sh -c 不剥，包了反而是多余的。
+check('Windows 上整条命令行再包一层引号', winShell === false || /^"[^]*"$/.test(shimLine) === true, shimLine)
 check('垫片参数在命令行里可读', shimLine.includes('service start') === true, shimLine)
 
 const spaced = buildCommand('C:\\npm\\my opencode.exe', [], 'exe')
